@@ -1,4 +1,5 @@
-import { LedgerDatasource, PublicHLDatasource } from '../datasource/hyperliquid';
+import { PublicHLDatasource } from '../datasource/hyperliquid';
+import type { LedgerDatasource } from '../datasource/hyperliquid';
 
 const TARGET_BUILDER = process.env.TARGET_BUILDER?.toLowerCase();
 

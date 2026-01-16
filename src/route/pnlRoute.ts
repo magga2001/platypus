@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { PnlController } from '../controller/pnlController';
+import { LedgerService } from '../service/ledgerService';
 
 const router = Router();
-const pnlController = new PnlController();
+const ledgerService = new LedgerService();
+const pnlController = new PnlController(ledgerService);
 
 /**
  * @openapi

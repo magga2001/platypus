@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { TradesController } from '../controller/tradeController';
+import { LedgerService } from '../service/ledgerService';
 
 const router = Router();
-const tradesController = new TradesController();
+const ledgerService = new LedgerService();
+const tradesController = new TradesController(ledgerService);
 
 /**
  * @openapi

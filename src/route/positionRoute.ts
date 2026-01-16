@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { PositionsController } from '../controller/positionController';
+import { LedgerService } from '../service/ledgerService';
 
 const router = Router();
-const positionsController = new PositionsController();
-
+const ledgerService = new LedgerService();  
+const positionsController = new PositionsController(ledgerService);
 /**
  * @openapi
  * /v1/positions/history:
