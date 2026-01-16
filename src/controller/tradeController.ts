@@ -1,32 +1,49 @@
-// src/controllers/trades.controller.ts
-import type { Request, Response } from 'express';
+// src/controller/tradeController.ts
+import { Request, Response } from 'express';
 import { LedgerService } from '../service/ledgerService';
-import { parseBool, parseNumber } from '../utils/math';
 
 export class TradesController {
-  constructor(private readonly ledger: LedgerService) {}
+  private ledgerService: LedgerService;
 
-  getTrades = async (req: Request, res: Response) => {
-    const {
-      user,
-      coin,
-      fromMs,
-      toMs,
-      builderOnly,
-    } = req.query;
+  constructor(ledgerService: LedgerService) {
+    this.ledgerService = ledgerService;
+  }
 
-    if (!user) {
-      return res.status(400).json({ error: 'user is required' });
+  getTrades = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { user, coin, fromMs, toMs, builderOnly } = req.query;
+
+      // Validate required params
+      if (!user || typeof user !== 'string') {
+        res
+          .status(400)
+          .json({ error: 'Missing or invalid required parameter: user' });
+        return;
+      }
+
+      // Parse query params
+      const params = {
+        user,
+        coin: coin as string | undefined,
+        fromMs: fromMs ? Number(fromMs) : undefined,
+        toMs: toMs ? Number(toMs) : undefined,
+        builderOnly: builderOnly === 'true',
+      };
+
+      const trades = await this.ledgerService.getTrades(params);
+
+      res.status(200).json({
+        success: true,
+        data: trades,
+        count: trades.length,
+      });
+    } catch (error) {
+      console.error('Error fetching trades:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch trades',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
-
-    const trades = await this.ledger.getTrades({
-      user: String(user),
-      coin: coin ? String(coin) : undefined,
-      fromMs: parseNumber(fromMs as string),
-      toMs: parseNumber(toMs as string),
-      builderOnly: parseBool(builderOnly as string),
-    });
-
-    res.json(trades);
   };
 }
