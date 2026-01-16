@@ -21,6 +21,7 @@
   },
   "homepage": "https://github.com/magga2001/platypus#readme",
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.9",
     "dotenv": "^17.2.3",
@@ -36,6 +37,7 @@
   },
   "dependencies": {
     "@scalar/express-api-reference": "^0.8.34",
+    "cors": "^2.8.5",
     "swagger-jsdoc": "^6.2.8"
   }
 }
