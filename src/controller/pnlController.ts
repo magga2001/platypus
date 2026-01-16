@@ -1,5 +1,6 @@
 // src/controllers/pnl.controller.ts
-import { Request, Response } from 'express';
+// src/controllers/pnl.controller.ts
+import type { Request, Response } from 'express';
 import { LedgerService } from '../service/ledgerService';
 import { parseBool, parseNumber } from '../utils/math';
 

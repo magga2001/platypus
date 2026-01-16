@@ -1,5 +1,5 @@
 // src/controllers/positions.controller.ts
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { LedgerService } from '../service/ledgerService';
 import { parseBool, parseNumber } from '../utils/math';
 
