@@ -8,19 +8,19 @@ const router = express.Router();
 
 const defaultRoutes = [
   {
-    path: '/api/trade',
+    path: '/trades',
     route: tradeRoute,
   },
     {
-    path: '/api/position',
+    path: '/positions',
     route: positionRoute,
   },
   {
-    path: '/api/pnl',
+    path: '/pnl',
     route: pnlRoute,
   },
   {
-    path: '/api/leaderboard',
+    path: '/leaderboard',
     route: leaderboardRoute,
   },
 ];
