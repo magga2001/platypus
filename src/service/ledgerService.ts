@@ -16,6 +16,15 @@ export class LedgerService {
      Trades
      ========================= */
 
+  /**
+   * Get trades for a user with optional filters.
+   * 
+   * API Spec: GET /v1/trades?user=&coin=&fromMs=&toMs=&builderOnly=false
+   * Returns normalized fills: timeMs, coin, side, px, sz, fee, closedPnl, builder (optional)
+   * 
+   * All-trades mode (default): returns complete ledger
+   * Builder-only mode: returns only builder-attributed trades
+   */
   async getTrades(params: {
     user: string;
     coin?: string;
@@ -23,16 +32,34 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
+    // Fetch fills from datasource
     const fills = await this.datasource.getFills(params);
 
-    if (!params.builderOnly) {
-      return fills;
+    // Filter by coin if specified
+    let filteredFills = fills;
+    if (params.coin) {
+      filteredFills = fills.filter((f) => f.coin === params.coin);
     }
 
-    return fills.map((f) => ({
-      ...f,
+    // Normalize to API response format
+    const normalizedTrades = filteredFills.map((f) => ({
+      timeMs: f.time,
+      coin: f.coin,
+      side: f.side,
+      px: f.px,
+      sz: f.sz,
+      fee: f.fee,
+      closedPnl: f.closedPnl,
+      builder: f.builderFee ? TARGET_BUILDER : undefined, // If builderFee exists, attribute to TARGET_BUILDER
       builderAttributed: this.isBuilderTrade(f),
     }));
+
+    // If builder-only mode, filter to only builder-attributed trades
+    if (params.builderOnly) {
+      return normalizedTrades.filter((t) => t.builderAttributed);
+    }
+
+    return normalizedTrades;
   }
 
   /* =========================
@@ -167,12 +194,23 @@ export class LedgerService {
      Internal helpers
      ========================= */
 
+  /**
+   * Check if a fill is attributed to the configured TARGET_BUILDER.
+   * 
+   * According to Hyperliquid API spec:
+   * - builderFee field is present (and > 0) when trade is builder-attributed
+   * - The specific builder address is not returned in the API response
+   * 
+   * Note: Since the public API doesn't expose the actual builder address,
+   * we check for presence of builderFee as "best effort" attribution.
+   * For exact builder matching, would need access to private/enhanced API.
+   */
   private isBuilderTrade(fill: any): boolean {
     if (!TARGET_BUILDER) return false;
-    return (
-      fill.builder &&
-      fill.builder.toLowerCase() === TARGET_BUILDER
-    );
+    
+    // Check if builderFee field exists and is > 0
+    // This indicates the trade was attributed to a builder
+    return fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0;
   }
 
   private buildPositionLifecycles(fills: any[]) {

@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { LeaderboardController } from '../controller/leaderboardController';
+import { LedgerService } from '../service/ledgerService';
 
 const router = Router();
-const leaderboardController = new LeaderboardController();
+const ledgerService = new LedgerService();
+const leaderboardController = new LeaderboardController(ledgerService);
 
 /**
  * @openapi
@@ -48,6 +50,6 @@ const leaderboardController = new LeaderboardController();
  *       200:
  *         description: Leaderboard returned
  */
-router.get('/leaderboard', leaderboardController.getLeaderboard);
+router.get('/', leaderboardController.getLeaderboard);
 
 export default router;
