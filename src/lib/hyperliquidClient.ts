@@ -35,19 +35,16 @@ export interface Fill {
 }
 
 export interface HyperliquidClientOptions {
-	baseUrl: string; // e.g. https://api.hyperliquid.example
-	apiKey?: string; // optional API key if Hyperliquid requires auth
+	baseUrl: string; // e.g. https://api.hyperliquid.xyz
 	timeoutMs?: number;
 }
 
 export class HyperliquidClient {
 	private baseUrl: string;
-	private apiKey?: string;
 	private timeoutMs: number;
 
 	constructor(opts: HyperliquidClientOptions) {
 		this.baseUrl = opts.baseUrl.replace(/\/$/, '');
-		this.apiKey = opts.apiKey;
 		this.timeoutMs = opts.timeoutMs ?? 10_000;
 	}
 
@@ -77,8 +74,6 @@ export class HyperliquidClient {
 			'Content-Type': 'application/json',
 		};
 
-		if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-
 		try {
 			const res = await fetch(url, {
 				method: 'GET',
@@ -107,8 +102,6 @@ export class HyperliquidClient {
 			'Accept': 'application/json',
 			'Content-Type': 'application/json',
 		};
-
-		if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
 		try {
 			const res = await fetch(url, {
@@ -166,8 +159,7 @@ export class HyperliquidClient {
 }
 
 export const defaultHyperliquidClient = new HyperliquidClient({
-	baseUrl: process.env.HYPERLIQUID_API_URL || 'http://localhost:8080',
-	apiKey: process.env.HYPERLIQUID_API_KEY,
+	baseUrl: process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz',
 });
 
 export default HyperliquidClient;

@@ -50,6 +50,6 @@ const leaderboardController = new LeaderboardController(ledgerService);
  *       200:
  *         description: Leaderboard returned
  */
-router.get('/leaderboard', leaderboardController.getLeaderboard);
+router.get('/', leaderboardController.getLeaderboard);
 
 export default router;

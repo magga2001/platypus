@@ -45,6 +45,6 @@ const tradesController = new TradesController(ledgerService);
  *       200:
  *         description: List of normalized trades
  */
-router.get('/trades', tradesController.getTrades);
+router.get('/', tradesController.getTrades);
 
 export default router;

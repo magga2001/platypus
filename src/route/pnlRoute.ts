@@ -48,6 +48,6 @@ const pnlController = new PnlController(ledgerService);
  *       200:
  *         description: PnL summary returned
  */
-router.get('/pnl', pnlController.getPnl);
+router.get('/', pnlController.getPnl);
 
 export default router;
