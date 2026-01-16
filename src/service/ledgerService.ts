@@ -6,9 +6,7 @@ const TARGET_BUILDER = process.env.TARGET_BUILDER?.toLowerCase();
 export class LedgerService {
   private datasource: LedgerDatasource;
 
-  constructor(
-    datasource: LedgerDatasource = new PublicHLDatasource(),
-  ) {
+  constructor(datasource: LedgerDatasource = new PublicHLDatasource()) {
     this.datasource = datasource;
   }
 
@@ -18,10 +16,10 @@ export class LedgerService {
 
   /**
    * Get trades for a user with optional filters.
-   * 
+   *
    * API Spec: GET /v1/trades?user=&coin=&fromMs=&toMs=&builderOnly=false
    * Returns normalized fills: timeMs, coin, side, px, sz, fee, closedPnl, builder (optional)
-   * 
+   *
    * All-trades mode (default): returns complete ledger
    * Builder-only mode: returns only builder-attributed trades
    */
@@ -51,12 +49,12 @@ export class LedgerService {
       fee: f.fee,
       closedPnl: f.closedPnl,
       builder: f.builderFee ? TARGET_BUILDER : undefined, // If builderFee exists, attribute to TARGET_BUILDER
-      builderAttributed: this.isBuilderTrade(f),
+      builder: this.isBuilderTrade(f),
     }));
 
     // If builder-only mode, filter to only builder-attributed trades
     if (params.builderOnly) {
-      return normalizedTrades.filter((t) => t.builderAttributed);
+      return normalizedTrades.filter((t) => t.builder);
     }
 
     return normalizedTrades;
@@ -106,20 +104,11 @@ export class LedgerService {
       ? lifecycles.filter((l) => l.builderOnly && !l.tainted)
       : lifecycles;
 
-    const realizedPnl = eligible.reduce(
-      (sum, l) => sum + l.realizedPnl,
-      0,
-    );
+    const realizedPnl = eligible.reduce((sum, l) => sum + l.realizedPnl, 0);
 
-    const feesPaid = eligible.reduce(
-      (sum, l) => sum + l.feesPaid,
-      0,
-    );
+    const feesPaid = eligible.reduce((sum, l) => sum + l.feesPaid, 0);
 
-    const tradeCount = eligible.reduce(
-      (sum, l) => sum + l.tradeCount,
-      0,
-    );
+    const tradeCount = eligible.reduce((sum, l) => sum + l.tradeCount, 0);
 
     const effectiveCapital = params.maxStartCapital
       ? Math.min(equityAtFromMs, params.maxStartCapital)
@@ -128,14 +117,10 @@ export class LedgerService {
     return {
       realizedPnl,
       returnPct:
-        effectiveCapital > 0
-          ? (realizedPnl / effectiveCapital) * 100
-          : 0,
+        effectiveCapital > 0 ? (realizedPnl / effectiveCapital) * 100 : 0,
       feesPaid,
       tradeCount,
-      tainted: params.builderOnly
-        ? lifecycles.some((l) => l.tainted)
-        : false,
+      tainted: params.builderOnly ? lifecycles.some((l) => l.tainted) : false,
     };
   }
 
@@ -196,21 +181,23 @@ export class LedgerService {
 
   /**
    * Check if a fill is attributed to the configured TARGET_BUILDER.
-   * 
+   *
    * According to Hyperliquid API spec:
    * - builderFee field is present (and > 0) when trade is builder-attributed
    * - The specific builder address is not returned in the API response
-   * 
+   *
    * Note: Since the public API doesn't expose the actual builder address,
    * we check for presence of builderFee as "best effort" attribution.
    * For exact builder matching, would need access to private/enhanced API.
    */
   private isBuilderTrade(fill: any): boolean {
     if (!TARGET_BUILDER) return false;
-    
+
     // Check if builderFee field exists and is > 0
     // This indicates the trade was attributed to a builder
-    return fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0;
+    return (
+      fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0
+    );
   }
 
   private buildPositionLifecycles(fills: any[]) {
@@ -238,10 +225,8 @@ export class LedgerService {
         }
 
         if (fill.netAfter === 0) {
-          current.tainted =
-            current.hasNonBuilder && current.hasBuilder;
-          current.builderOnly =
-            current.hasBuilder && !current.tainted;
+          current.tainted = current.hasNonBuilder && current.hasBuilder;
+          current.builderOnly = current.hasBuilder && !current.tainted;
 
           lifecycles.push(current);
           current = null;
