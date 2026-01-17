@@ -347,20 +347,89 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
-    // Cache-first pattern: check database first, fall back to API
+    // Smart cache + backfill pattern: check latest timestamp, only fetch new data from API
     const normalizedUser = params.user.toLowerCase();
     let fills: any[] = [];
 
-    // Try to load from database
-    const cachedFills = await this.userFillRepo.findByUser(normalizedUser, {
-      coin: params.coin,
-      fromMs: params.fromMs,
-      toMs: params.toMs,
-    });
+    // Get latest timestamp from database for this user (and coin if specified)
+    const latestDbTimestamp = await this.userFillRepo.getLatestTimestamp(
+      normalizedUser,
+      params.coin,
+    );
 
-    if (cachedFills.length > 0) {
-      // Convert DB records back to fill format
-      fills = cachedFills.map((f) => ({
+    // If we have cached data, fetch from cache + backfill any new data
+    if (latestDbTimestamp !== null) {
+      // Load existing cached fills
+      const cachedFills = await this.userFillRepo.findByUser(normalizedUser, {
+        coin: params.coin,
+        fromMs: params.fromMs,
+        toMs: params.toMs,
+      });
+
+      // Fetch only new fills from API (after latest cached timestamp)
+      // Add 1ms to avoid duplicate of the last cached fill
+      const newFillsFromApi = await this.datasource.getFills({
+        ...params,
+        fromMs: latestDbTimestamp + 1,
+      });
+
+      // Backfill new fills into database
+      if (newFillsFromApi.length > 0) {
+        console.log(
+          `⚠️ Found ${newFillsFromApi.length} new fills for ${normalizedUser} after ${new Date(latestDbTimestamp).toISOString()}, backfilling...`,
+        );
+
+        const newFills: NewUserFill[] = newFillsFromApi.map((f) => ({
+          user: normalizedUser,
+          coin: f.coin,
+          oid: f.oid,
+          tid: f.tid,
+          px: f.px,
+          sz: f.sz,
+          side: f.side,
+          time: f.time,
+          closedPnl: f.closedPnl || '0',
+          fee: f.fee || '0',
+          builderFee: f.builderFee || null,
+          startPosition: f.startPosition || '0',
+          dir: f.dir,
+          hash: f.hash,
+        }));
+
+        try {
+          // Batch insert in chunks of 100
+          const BATCH_SIZE = 100;
+          for (let i = 0; i < newFills.length; i += BATCH_SIZE) {
+            const batch = newFills.slice(i, i + BATCH_SIZE);
+            await this.userFillRepo.upsertMany(batch);
+          }
+          console.log(`✅ Backfilled ${newFillsFromApi.length} new fills`);
+        } catch (error) {
+          console.warn('Failed to backfill new fills:', error);
+        }
+      }
+
+      // Combine cached fills + new fills and convert to API format
+      const allDbFills = [
+        ...cachedFills,
+        ...newFillsFromApi.map((f) => ({
+          coin: f.coin,
+          time: f.time,
+          side: f.side,
+          px: f.px,
+          sz: f.sz,
+          fee: f.fee,
+          closedPnl: f.closedPnl,
+          builderFee: f.builderFee,
+          startPosition: f.startPosition,
+          dir: f.dir,
+          oid: f.oid,
+          tid: f.tid,
+          hash: f.hash,
+        })),
+      ];
+
+      fills = allDbFills.map((f) => ({
         coin: f.coin,
         time: f.time,
         side: f.side,
@@ -376,37 +445,39 @@ export class LedgerService {
         hash: f.hash,
       }));
     } else {
-      // Fetch from API if not in cache
+      // No cached data - fetch all from API
       fills = await this.datasource.getFills(params);
 
-      // Insert into database for future cache hits
+      // Cache all fills in database for future requests
       if (fills.length > 0) {
+        console.log(
+          `💾 First time caching ${fills.length} fills for ${normalizedUser}`,
+        );
+
         const newFills: NewUserFill[] = fills.map((f) => ({
           user: normalizedUser,
           coin: f.coin,
           oid: f.oid,
           tid: f.tid,
-          px: parseFloat(f.px),
-          sz: parseFloat(f.sz),
-          side: f.side as 'A' | 'B',
+          px: f.px,
+          sz: f.sz,
+          side: f.side,
           time: f.time,
-          closedPnl: parseFloat(f.closedPnl || '0'),
-          fee: parseFloat(f.fee || '0'),
-          builderFee: f.builderFee ? parseFloat(f.builderFee) : null,
-          startPosition: parseFloat(f.startPosition || '0'),
+          closedPnl: f.closedPnl || '0',
+          fee: f.fee || '0',
+          builderFee: f.builderFee || null,
+          startPosition: f.startPosition || '0',
           dir: f.dir,
           hash: f.hash,
         }));
 
         try {
-          // Batch insert in chunks of 100
           const BATCH_SIZE = 100;
           for (let i = 0; i < newFills.length; i += BATCH_SIZE) {
             const batch = newFills.slice(i, i + BATCH_SIZE);
-            await this.userFillRepo.createMany(batch);
+            await this.userFillRepo.upsertMany(batch);
           }
         } catch (error) {
-          // Log but don't fail - database insert errors shouldn't break the API
           console.warn('Failed to cache fills in database:', error);
         }
       }

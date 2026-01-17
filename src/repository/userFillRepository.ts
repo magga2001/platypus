@@ -264,6 +264,37 @@ export class UserFillRepository {
   }
 
   /**
+   * Get all distinct user addresses that have fills in the database
+   */
+  async getDistinctUsers(): Promise<string[]> {
+    const result = await db
+      .selectDistinct({ user: userFillModel.user })
+      .from(userFillModel);
+    
+    return result.map(r => r.user);
+  }
+
+  /**
+   * Get the latest fill timestamp for a user (optionally filtered by coin)
+   * Returns null if no fills exist
+   */
+  async getLatestTimestamp(user: string, coin?: string): Promise<number | null> {
+    const conditions = [eq(userFillModel.user, user)];
+    if (coin) {
+      conditions.push(eq(userFillModel.coin, coin));
+    }
+
+    const [latest] = await db
+      .select({ time: userFillModel.time })
+      .from(userFillModel)
+      .where(and(...conditions))
+      .orderBy(desc(userFillModel.time))
+      .limit(1);
+
+    return latest?.time ?? null;
+  }
+
+  /**
    * Upsert fill (insert or update if exists)
    * Useful for syncing data from Hyperliquid API
    */

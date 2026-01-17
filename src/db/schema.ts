@@ -5,7 +5,7 @@ import {
   varchar,
   text,
   timestamp,
-  uniqueIndex,
+  index,
   unique,
   bigint,
   boolean as pgBoolean,
@@ -61,15 +61,15 @@ export const userFillModel = pgTable(
       table.tid,
     ),
     // Index on user (wallet address) for efficient user queries
-    uniqueIndex('user_idx').on(table.user),
+    index('user_idx').on(table.user),
     // Index on time (ms) for efficient time-range queries
-    uniqueIndex('time_idx').on(table.time),
+    index('time_idx').on(table.time),
     // Composite index on user + time for efficient user-specific time-range queries
-    uniqueIndex('user_time_idx').on(table.user, table.time),
+    index('user_time_idx').on(table.user, table.time),
     // Index on user + coin for efficient per-coin queries
-    uniqueIndex('user_coin_idx').on(table.user, table.coin),
+    index('user_coin_idx').on(table.user, table.coin),
     // Index on hash for quick lookups
-    uniqueIndex('hash_idx').on(table.hash),
+    index('hash_idx').on(table.hash),
   ],
 );
 
