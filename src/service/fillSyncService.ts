@@ -27,7 +27,7 @@ export class FillSyncService {
 
     // Don't subscribe twice
     if (this.activeSubscriptions.has(normalizedUser)) {
-      console.log(`Already syncing fills for ${normalizedUser}`);
+      console.log(`ℹ️  Already syncing ${normalizedUser} (${this.activeSubscriptions.size} total users)`);
       return;
     }
 
@@ -74,6 +74,7 @@ export class FillSyncService {
 
     // Store unsubscribe function
     this.activeSubscriptions.set(normalizedUser, unsubscribe);
+    console.log(`✅ Subscribed to fills for ${normalizedUser} (now syncing ${this.activeSubscriptions.size} users)`);
   }
 
   /**
@@ -112,6 +113,17 @@ export class FillSyncService {
    */
   isSyncing(user: string): boolean {
     return this.activeSubscriptions.has(user.toLowerCase());
+  }
+
+  /**
+   * Ensure a user is being synced (idempotent)
+   * Only starts sync if not already syncing
+   * @param user - User address to ensure is syncing
+   */
+  async ensureUserSyncing(user: string): Promise<void> {
+    if (!this.isSyncing(user)) {
+      await this.startSyncingUser(user);
+    }
   }
 }
 

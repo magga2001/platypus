@@ -476,17 +476,14 @@ export class LedgerService {
             await this.userFillRepo.upsertMany(batch);
           }
           console.log(`✅ Cached ${fills.length} fills for ${normalizedUser}`);
+          
+          // Ensure WebSocket sync is started (idempotent - won't duplicate)
+          fillSyncService.ensureUserSyncing(normalizedUser).catch((error) => {
+            console.error(`Failed to start sync for ${normalizedUser}:`, error);
+          });
         } catch (error) {
           console.warn('Failed to cache fills in database:', error);
         }
-      }
-      
-      // Start WebSocket sync for this new user
-      if (!fillSyncService.isSyncing(normalizedUser)) {
-        console.log(`🔄 Starting WebSocket sync for ${normalizedUser}...`);
-        fillSyncService.startSyncingUser(normalizedUser).catch((error) => {
-          console.error(`Failed to start sync for ${normalizedUser}:`, error);
-        });
       }
     }
 

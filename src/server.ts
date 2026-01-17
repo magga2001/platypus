@@ -27,8 +27,8 @@ async function startFillSync() {
         console.log(`🔄 Backfilling data for ${user}...`);
         await ledgerService.backfillUser(user);
         
-        console.log(`🔄 Starting WebSocket sync for ${user}...`);
-        await fillSyncService.startSyncingUser(user);
+        console.log(`🔄 Ensuring WebSocket sync for ${user}...`);
+        await fillSyncService.ensureUserSyncing(user);
       } catch (error) {
         console.error(`Failed to start sync for ${user}:`, error);
       }
