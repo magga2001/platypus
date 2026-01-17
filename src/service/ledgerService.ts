@@ -57,7 +57,7 @@ export class LedgerService {
 
     // If builder-only mode, filter to only builder-attributed trades
     if (params.builderOnly) {
-      return normalizedTrades.filter((t) => t.builderAttributed);
+      return normalizedTrades.filter((t) => t.builder);
     }
 
     return normalizedTrades;
