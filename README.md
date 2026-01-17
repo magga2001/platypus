@@ -10,10 +10,10 @@ It is designed for analytics, transparency, research, and performance comparison
 
 Hyperliquid exposes raw fills and account data, but does not provide:
 
-* Position lifecycle reconstruction
-* Builder-segmented performance
-* Comparable PnL and return metrics
-* Leaderboards with execution filtering
+- Position lifecycle reconstruction
+- Builder-segmented performance
+- Comparable PnL and return metrics
+- Leaderboards with execution filtering
 
 Platypus fills this gap by transforming raw fill data into **structured, auditable performance analytics**, with explicit handling of builder-attributed execution.
 
@@ -23,18 +23,18 @@ Platypus fills this gap by transforming raw fill data into **structured, auditab
 
 ### What Platypus Is
 
-* A **read-only analytics API**
-* A **trade and position reconstruction engine**
-* A **PnL and return calculation service**
-* A **builder-attribution filter based on public signals**
+- A **read-only analytics API**
+- A **trade and position reconstruction engine**
+- A **PnL and return calculation service**
+- A **builder-attribution filter based on public signals**
 
 ### What Platypus Is Not
 
-* Not a trading bot
-* Not placing or simulating orders
-* Not a wallet, portfolio manager, or balance authority
-* Not verifying builder identities
-* Not modifying on-chain or exchange state
+- Not a trading bot
+- Not placing or simulating orders
+- Not a wallet, portfolio manager, or balance authority
+- Not verifying builder identities
+- Not modifying on-chain or exchange state
 
 No private keys are ever used. All data is public and read-only.
 
@@ -43,6 +43,13 @@ No private keys are ever used. All data is public and read-only.
 ## Quick Start
 
 ```bash
+# Start local database and pgAdmin (recommended)
+docker compose -f docker-compose.local.yml up -d --build
+
+# Rebuild & start if you've changed Dockerfile or deps
+docker compose -f docker-compose.local.yml up -d --build --force-recreate
+
+# Run the app locally (outside Docker)
 npm install && npm run dev
 ```
 
@@ -51,6 +58,8 @@ The server runs at:
 ```
 http://localhost:3000
 ```
+
+Refer to Environmental Variable below for the .env file
 
 Interactive API documentation is available at:
 
@@ -62,49 +71,59 @@ Interactive API documentation is available at:
 
 ## Docker Deployment
 
-### Option 1: Local Development (Database + pgAdmin Only)
+### Local development with `docker-compose.local.yml`
 
-Run PostgreSQL and pgAdmin locally, then run the app with `npm run dev`:
+This repo includes a lightweight local compose file that starts PostgreSQL, pgAdmin, and the migration job. Use these commands (I verified them locally):
+
+Start (build if needed):
 
 ```bash
-# Start local database and pgAdmin
-docker-compose -f docker-compose.local.yml up -d
-
-# Run the app locally
-npm run dev
+docker compose -f docker-compose.local.yml up -d --build
 ```
 
-**Services:**
-- PostgreSQL: `localhost:5432` (separate `postgres_data_local` volume)
+Check containers and ports:
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+```
+
+Follow logs (all services):
+
+```bash
+docker compose -f docker-compose.local.yml logs -f --tail=200
+```
+
+Access services:
+
 - pgAdmin: http://localhost:5050 (login: `admin@admin.com` / `admin`)
-- App: `localhost:3000` (via `npm run dev`)
+- Postgres: `localhost:5432` (DB user/pass from `.env` or compose file)
+- App (run locally with nodemon / dev script): http://localhost:3000
 
-**To stop:**
-```bash
-docker-compose -f docker-compose.local.yml down
-```
-
-### Option 2: Full Production Stack (All in Docker)
-
-Run everything in Docker (database, migrations, app):
+To stop & remove local stack:
 
 ```bash
-# Build and start full stack
-docker-compose up --build -d
-
-# View logs
-docker-compose logs -f app
-
-# Stop stack
-docker-compose down
+docker compose -f docker-compose.local.yml down
 ```
 
-**Services:**
-- PostgreSQL: Internal (separate `postgres_data` volume)
-- App: http://localhost:3000
-- Migrations: Runs automatically on startup
+Notes:
 
-**Note:** Both setups use **separate database volumes** so data won't conflict.
+- The compose file runs migrations on startup (look for container `migrate-1` or `platypus-migrate-1`). If migrations report `No schema changes`, your DB is up-to-date.
+- If you see a warning about `version` being obsolete, remove the `version:` key from `docker-compose.local.yml` — modern Compose uses the top-level format without `version`.
+- Local development typically runs the app outside Docker with `npm run dev` so you can hot-reload code while using the containerized DB.
+
+### Full Docker stack (optional)
+
+If you prefer running the app inside Docker as well, use the normal compose:
+
+```bash
+docker compose up --build -d
+
+docker compose logs -f app
+
+docker compose down
+```
+
+Both local and full stacks use separate volumes for local vs production-style DB setups to avoid conflicts.
 
 ---
 
@@ -139,6 +158,7 @@ DB_NAME=platypus
 ```
 
 **Important:**
+
 - `TARGET_BUILDER` is used only as a **label** in responses. It is **not used for verification**.
 - Database variables are used for local development. Docker Compose overrides `DB_HOST=postgres` internally.
 
@@ -213,15 +233,15 @@ Computes realized performance metrics over a time range.
 
 ### Response Fields
 
-* `realizedPnl`
-* `returnPct`
-* `feesPaid`
-* `tradeCount`
-* `fillCount`
-* `tainted`
-* `effectiveCapital`
-* `capitalSource`
-* `equityAtFromMs`
+- `realizedPnl`
+- `returnPct`
+- `feesPaid`
+- `tradeCount`
+- `fillCount`
+- `tainted`
+- `effectiveCapital`
+- `capitalSource`
+- `equityAtFromMs`
 
 ---
 
@@ -316,9 +336,9 @@ When `builderOnly=true`, tainted lifecycles are excluded and flagged.
 
 Because builder addresses are not exposed:
 
-* The specific builder cannot be verified
-* Multiple builders cannot be distinguished
-* All `builderFee > 0` trades are treated uniformly
+- The specific builder cannot be verified
+- Multiple builders cannot be distinguished
+- All `builderFee > 0` trades are treated uniformly
 
 ---
 
@@ -334,8 +354,8 @@ returnPct = realizedPnl / effectiveCapital
 
 Where `effectiveCapital` is determined by:
 
-* Historical equity at `fromMs`, if available
-* Otherwise `maxStartCapital`, if supplied
+- Historical equity at `fromMs`, if available
+- Otherwise `maxStartCapital`, if supplied
 
 This prevents small accounts from appearing disproportionately successful and enables fair leaderboard comparisons.
 
@@ -384,11 +404,11 @@ Hyperliquid does not provide a list of all users, so rankings apply only to the 
 
 ## Security and Safety
 
-* No private keys
-* Read-only API usage
-* No trade execution
-* No on-chain state modification
-* Public data only
+- No private keys
+- Read-only API usage
+- No trade execution
+- No on-chain state modification
+- Public data only
 
 ---
 
