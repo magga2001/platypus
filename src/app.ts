@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 
 // Routes
 import router from './route';
@@ -13,6 +14,14 @@ import openapiSpecification from './config/openapi';
 const app = express();
 
 app.set('trust proxy', 1); // trust first proxy (Nginx)
+
+// CORS middleware - enables frontend requests
+app.use(
+  cors({
+    origin: true, // Allow all origins in development (or specify frontend URL)
+    credentials: true,
+  }),
+);
 
 app.use(express.json());
 

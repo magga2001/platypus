@@ -3,7 +3,7 @@ import { PositionsController } from '../controller/positionController';
 import { LedgerService } from '../service/ledgerService';
 
 const router = Router();
-const ledgerService = new LedgerService();  
+const ledgerService = new LedgerService();
 const positionsController = new PositionsController(ledgerService);
 /**
  * @openapi
@@ -42,6 +42,6 @@ const positionsController = new PositionsController(ledgerService);
  *       200:
  *         description: Position history returned
  */
-router.get('/positions/history', positionsController.getPositionHistory);
+router.get('/history', positionsController.getPositionHistory);
 
 export default router;
