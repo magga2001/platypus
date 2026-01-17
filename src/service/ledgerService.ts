@@ -2,6 +2,7 @@ import { PublicHLDatasource } from '../datasource/hyperliquid';
 import type { LedgerDatasource } from '../datasource/hyperliquid';
 import { UserFillRepository } from '../repository/userFillRepository';
 import type { NewUserFill } from '../db/schema';
+import { fillSyncService } from './fillSyncService';
 
 const TARGET_BUILDER = process.env.TARGET_BUILDER?.toLowerCase();
 
@@ -356,6 +357,15 @@ export class LedgerService {
       normalizedUser,
       params.coin,
     );
+
+    // If this is a new user (no data in DB), start WebSocket sync for them
+    if (latestDbTimestamp === null && !fillSyncService.isSyncing(normalizedUser)) {
+      console.log(`🆕 New user detected: ${normalizedUser}, starting WebSocket sync...`);
+      // Start syncing in background (don't await)
+      fillSyncService.startSyncingUser(normalizedUser).catch((error) => {
+        console.error(`Failed to start sync for ${normalizedUser}:`, error);
+      });
+    }
 
     // If we have cached data, fetch from cache + backfill any new data
     if (latestDbTimestamp !== null) {

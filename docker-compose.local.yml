@@ -1,6 +1,19 @@
 version: '3.8'
 
 services:
+  migrate:
+    build: .
+    command: sh -c "npx drizzle-kit generate && npx drizzle-kit push"
+    environment:
+      - DB_USER=${DB_USER:-postgres}
+      - DB_HOST=postgres
+      - DB_NAME=${DB_NAME:-platypus}
+      - DB_PASS=${DB_PASS:-postgres}
+      - DB_PORT=5432
+    depends_on:
+      - postgres
+    restart: "no"
+
   postgres:
     image: postgres:15-alpine
     environment:
@@ -10,7 +23,7 @@ services:
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_local:/var/lib/postgresql/data
     restart: unless-stopped
 
   pgadmin:
@@ -25,4 +38,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  postgres_data_local:
