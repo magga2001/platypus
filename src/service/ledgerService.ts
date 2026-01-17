@@ -30,17 +30,11 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
-    // Get transformed fills with position tracking
+    // Get transformed fills with position tracking (already filtered by coin at datasource level)
     const transformedFills = await this.getTransformedFills(params);
 
-    // Filter by coin if specified (after transformation)
-    let filteredFills = transformedFills;
-    if (params.coin) {
-      filteredFills = transformedFills.filter((f) => f.coin === params.coin);
-    }
-
     // Normalize to API response format with all fields
-    const normalizedTrades = filteredFills.map((f) => ({
+    const normalizedTrades = transformedFills.map((f) => ({
       timeMs: f.timeMs,
       coin: f.coin,
       side: f.side,
@@ -70,14 +64,8 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
-    // Get transformed fills with position tracking
-    const transformedFills = await this.getTransformedFills(params);
-
-    // Build position lifecycles with builderOnly flag
-    const lifecycles = this.buildPositionLifecycles(
-      transformedFills,
-      params.builderOnly || false,
-    );
+    // Get lifecycles (reusable internal method)
+    const lifecycles = await this.getPositionLifecycles(params);
 
     return lifecycles
       .filter((l) => !params.builderOnly || l.builderOnly)
@@ -96,18 +84,12 @@ export class LedgerService {
     builderOnly?: boolean;
     maxStartCapital?: number;
   }) {
-    // Get transformed fills with position tracking
-    const transformedFills = await this.getTransformedFills(params);
+    // Reuse getPositionLifecycles to avoid duplication
+    const lifecycles = await this.getPositionLifecycles(params);
 
     const equityAtFromMs = await this.datasource.getEquityAt(
       params.user,
       params.fromMs,
-    );
-
-    // Build position lifecycles with builderOnly flag
-    const lifecycles = this.buildPositionLifecycles(
-      transformedFills,
-      params.builderOnly || false,
     );
 
     const eligible = params.builderOnly
@@ -120,8 +102,11 @@ export class LedgerService {
 
     const tradeCount = eligible.reduce((sum, l) => sum + l.tradeCount, 0);
 
-    // Use maxStartCapital if provided, otherwise fall back to equityAtFromMs
-    const effectiveCapital = params.maxStartCapital ?? equityAtFromMs;
+    // Spec: effectiveCapital = min(equityAtFromMs, maxStartCapital)
+    // If maxStartCapital not specified, use actual equityAtFromMs
+    const effectiveCapital = params.maxStartCapital !== undefined
+      ? Math.min(equityAtFromMs, params.maxStartCapital)
+      : equityAtFromMs;
 
     return {
       realizedPnl,
@@ -130,10 +115,6 @@ export class LedgerService {
       feesPaid,
       tradeCount,
       tainted: params.builderOnly ? lifecycles.some((l) => l.tainted) : false,
-      // Metadata: show which capital source was used
-      effectiveCapital,
-      capitalSource: params.maxStartCapital !== undefined ? 'maxStartCapital' : 'equityAtFromMs',
-      equityAtFromMs, // Always show actual equity found (even if maxStartCapital was used)
     };
   }
 
@@ -223,6 +204,26 @@ export class LedgerService {
   /* =========================
      Internal helpers
      ========================= */
+
+  /**
+   * Internal helper: Get position lifecycles for a user.
+   * This is a reusable method that both getPositionHistory and getPnl use.
+   * 
+   * Returns position lifecycles with builder/taint tracking.
+   */
+  private async getPositionLifecycles(params: {
+    user: string;
+    coin?: string;
+    fromMs?: number;
+    toMs?: number;
+    builderOnly?: boolean;
+  }) {
+    const transformedFills = await this.getTransformedFills(params);
+    return this.buildPositionLifecycles(
+      transformedFills,
+      params.builderOnly || false,
+    );
+  }
 
   /**
    * Internal helper: Get transformed fills with position tracking fields.

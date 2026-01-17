@@ -40,18 +40,28 @@ export class PublicHLDatasource implements LedgerDatasource {
 	 * Chooses the appropriate endpoint based on time parameters:
 	 * - If fromMs or toMs provided → use getAllFillsInRange (time-filtered, up to 10k fills with parallel batching)
 	 * - Otherwise → use getUserFills (most recent 2000 fills)
+	 * Filters by coin if specified.
 	 */
 	async getFills(params: GetFillsParams): Promise<Fill[]> {
-		const { user, fromMs, toMs } = params;
+		const { user, coin, fromMs, toMs } = params;
+
+		let fills: Fill[];
 
 		// If time range specified, fetch with parallel batching for up to 10k fills
 		if (fromMs !== undefined || toMs !== undefined) {
 			const startTime = fromMs || 0;
-			return await this.getAllFillsInRange(user, startTime, toMs);
+			fills = await this.getAllFillsInRange(user, startTime, toMs);
+		} else {
+			// Otherwise get most recent fills
+			fills = await defaultHyperliquidClient.getUserFills(user, false);
 		}
 
-		// Otherwise get most recent fills
-		return await defaultHyperliquidClient.getUserFills(user, false);
+		// Filter by coin if specified
+		if (coin) {
+			return fills.filter(fill => fill.coin === coin);
+		}
+
+		return fills;
 	}
 
 	/**
