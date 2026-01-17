@@ -16,6 +16,7 @@ import { defaultHyperliquidClient } from '../lib/hyperliquidClient';
 import type { Fill } from '../lib/hyperliquidClient';
 import { defaultHyperliquidWebSocket, HyperliquidWebSocket } from '../lib/hyperliquidWebSocket';
 import type { WsUserFills } from '../lib/hyperliquidWebSocket';
+import { userFillRepository } from '../repository/userFillRepository';
 
 export interface GetFillsParams {
   user: string;
@@ -249,23 +250,15 @@ export class PublicHLDatasource implements LedgerDatasource {
    * retrieve a list of all users. The leaderboard feature requires this method
    * to rank users by volume, PnL, or return percentage.
    *
-   * This implementation returns a hardcoded list of users for leaderboard functionality.
-   * For production, consider:
-   * - Maintaining an in-memory cache of users from previous queries
-   * - Using a database/indexing service to track known users
-   * - Accepting a user list as a parameter in the leaderboard request
-   * - Using a separate data source that maintains user registries
+   * This implementation returns users from the database (users who have made API calls).
+   * Only users with cached fills in the database will appear in the leaderboard.
    *
    * @returns Array of user addresses for leaderboard ranking
    */
   async getAllUsers(): Promise<string[]> {
-    // Default user list for leaderboard
-    return [
-      '0x0e09b56ef137f417e424f1265425e93bfff77e17',
-      '0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
-      '0x6c8031a9eb4415284f3f89c0420f697c87168263',
-      '0xa1650C9f9EAd31802Bf4f802c84B28eD9f123C19',
-    ];
+    // Get users from database
+    const users = await userFillRepository.getDistinctUsers();
+    return users;
   }
 
   /**
