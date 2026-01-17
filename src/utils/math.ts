@@ -1,4 +1,3 @@
-// src/controllers/utils.ts
 export function parseBool(val?: string): boolean {
   return val === 'true';
 }
