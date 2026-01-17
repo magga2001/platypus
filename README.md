@@ -40,90 +40,117 @@ No private keys are ever used. All data is public and read-only.
 
 ---
 
-## Quick Start
+## Quick Start (Local Development)
+
+### Prerequisites
+- Node.js 20+
+- Docker and Docker Compose
+
+### 1. Start Local Database
+
+Start PostgreSQL and pgAdmin using Docker:
 
 ```bash
-# Start local database and pgAdmin (recommended)
-docker compose -f docker-compose.local.yml up -d --build
-
-# Rebuild & start if you've changed Dockerfile or deps
-docker compose -f docker-compose.local.yml up -d --build --force-recreate
-
-# Run the app locally (outside Docker)
-npm install && npm run dev
+docker-compose -f docker-compose.local.yml up -d
 ```
 
-The server runs at:
+This will start:
+- **PostgreSQL**: Database on port 5432
+- **pgAdmin**: Database UI on port 5050
+- **Migrations**: Automatically applies database schema
 
+### 2. Configure Environment
+
+Create a `.env` file in the project root:
+
+```env
+PORT=3000
+NODE_ENV=development
+HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
+TARGET_BUILDER=your-builder-name
+
+# Database (local development)
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASS=postgres
+DB_NAME=platypus
 ```
-http://localhost:3000
+
+### 3. Install Dependencies and Run
+
+```bash
+npm install
+npm run dev
 ```
 
-Refer to Environmental Variable below for the .env file
+The server will start at: **http://localhost:3000**
 
-Interactive API documentation is available at:
+Interactive API documentation: **http://localhost:3000/docs**
 
+### 4. Access pgAdmin (Database UI)
+
+pgAdmin is available at: **http://localhost:5050**
+
+**Credentials:**
+- Email: `admin@admin.com`
+- Password: `admin`
+
+**Connect to Database:**
+1. Login to pgAdmin
+2. Right-click "Servers" → "Register" → "Server"
+3. **General tab**: Name: `Platypus Local`
+4. **Connection tab**:
+   - Host: `postgres` (Docker network name)
+   - Port: `5432`
+   - Database: `platypus`
+   - Username: `postgres`
+   - Password: `postgres`
+
+### 5. Stop Local Database
+
+```bash
+docker-compose -f docker-compose.local.yml down
 ```
-/docs
+
+To delete all data (clean database):
+```bash
+docker-compose -f docker-compose.local.yml down -v
 ```
 
 ---
 
-## Docker Deployment
+## Docker Deployment (Production)
 
-### Local development with `docker-compose.local.yml`
-
-This repo includes a lightweight local compose file that starts PostgreSQL, pgAdmin, and the migration job. Use these commands (I verified them locally):
-
-Start (build if needed):
+For production deployment, use the main Docker Compose file which runs everything in containers:
 
 ```bash
-docker compose -f docker-compose.local.yml up -d --build
+# Start all services (Database + App + pgAdmin) - builds on first run
+docker-compose up -d
+
+# If you've made code changes, rebuild before starting
+docker-compose up -d --build
+
+# View logs
+docker-compose logs -f
+
+# View app logs only
+docker-compose logs -f app
+
+# Stop all services
+docker-compose down
 ```
 
-Check containers and ports:
+This will start:
+- **PostgreSQL**: Database on port 5432
+- **Node.js App**: API server on port 3000 (built from Dockerfile)
+- **pgAdmin**: Database UI on port 5050
 
-```bash
-docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
-```
+The API will be available at: **http://localhost:3000**
 
-Follow logs (all services):
+pgAdmin access: **http://localhost:5050** (same credentials as local development)
 
-```bash
-docker compose -f docker-compose.local.yml logs -f --tail=200
-```
-
-Access services:
-
-- pgAdmin: http://localhost:5050 (login: `admin@admin.com` / `admin`)
-- Postgres: `localhost:5432` (DB user/pass from `.env` or compose file)
-- App (run locally with nodemon / dev script): http://localhost:3000
-
-To stop & remove local stack:
-
-```bash
-docker compose -f docker-compose.local.yml down
-```
-
-Notes:
-
-- The compose file runs migrations on startup (look for container `migrate-1` or `platypus-migrate-1`). If migrations report `No schema changes`, your DB is up-to-date.
-- If you see a warning about `version` being obsolete, remove the `version:` key from `docker-compose.local.yml` — modern Compose uses the top-level format without `version`.
-- Local development typically runs the app outside Docker with `npm run dev` so you can hot-reload code while using the containerized DB.
-
-### Full Docker stack (optional)
-
-If you prefer running the app inside Docker as well, use the normal compose:
-
-```bash
-docker compose up --build -d
-
-docker compose logs -f app
-
-docker compose down
-```
-
-Both local and full stacks use separate volumes for local vs production-style DB setups to avoid conflicts.
+**Note:** Production deployment uses a separate volume (`postgres_data`) from local development (`postgres_data_local`), so both can run independently without conflicts.
 
 ---
 

@@ -2,7 +2,240 @@
 
 ## Overview
 
-This document explains how the Trade Ledger API works, including perpetual vs spot trading, deposit tracking, and builder attribution.
+This document explains how the Trade Ledger API works, including perpetual vs spot trading, deposit tracking, builder attribution, real-time data synchronization, and database caching.
+
+## System Architecture
+
+### Three-Tier Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                     Client Layer                          │
+│  HTTP Requests → REST API Endpoints                       │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────┐
+│                  Application Layer                        │
+│                                                            │
+│  ┌──────────────────────────────────────────────┐        │
+│  │  Controllers (Express Routes)                │        │
+│  │  - TradesController                          │        │
+│  │  - PositionHistoryController                 │        │
+│  │  - PnlController                             │        │
+│  │  - LeaderboardController                     │        │
+│  │  - DepositsController                        │        │
+│  └──────────────┬───────────────────────────────┘        │
+│                 │                                          │
+│  ┌──────────────▼───────────────────────────────┐        │
+│  │  LedgerService (Business Logic)             │        │
+│  │  - Position lifecycle tracking               │        │
+│  │  - PnL calculation                           │        │
+│  │  - Builder attribution                       │        │
+│  │  - Multi-coin aggregation                    │        │
+│  │  - Smart caching strategy                    │        │
+│  └──────────────┬───────────────────────────────┘        │
+│                 │                                          │
+│  ┌──────────────▼───────────────────────────────┐        │
+│  │  FillSyncService (Real-time Sync)           │        │
+│  │  - WebSocket subscription management         │        │
+│  │  - Idempotent user syncing                   │        │
+│  │  - Auto-reconnection handling                │        │
+│  └──────────────────────────────────────────────┘        │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────────┐
+│                    Data Layer                             │
+│                                                            │
+│  ┌──────────────────┐  ┌──────────────────────────┐     │
+│  │  Database        │  │  Hyperliquid API         │     │
+│  │  (PostgreSQL)    │  │  (REST + WebSocket)      │     │
+│  │                  │  │                          │     │
+│  │  - user_fills    │  │  - userFills (REST)      │     │
+│  │  - Indexes       │  │  - userFills (WebSocket) │     │
+│  │  - Caching       │  │  - deposits              │     │
+│  │                  │  │  - equity                │     │
+│  └──────────────────┘  └──────────────────────────┘     │
+└──────────────────────────────────────────────────────────┘
+```
+
+## Real-Time Data Synchronization
+
+### Smart Caching Strategy
+
+The system uses a **hybrid approach** combining database caching with real-time WebSocket updates:
+
+**On First API Call (New User)**:
+1. Fetch initial 2000 fills from Hyperliquid REST API
+2. Cache fills in PostgreSQL database
+3. Start WebSocket subscription for real-time updates
+4. Return data to client
+
+**On Subsequent API Calls (Existing User)**:
+1. Read fills from database (fast!)
+2. WebSocket keeps database fresh in background
+3. Return data to client
+4. **No API call to Hyperliquid** (reduces load)
+
+**On Server Startup**:
+1. Load predefined users (configurable list)
+2. Check if user exists in database
+   - If YES: Backfill recent data (catch missed fills)
+   - If NO: Fetch initial 2000 fills
+3. Start WebSocket subscriptions for all users
+
+### Data Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Client Request (API Call)                  │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+         ┌───────────────────────────────┐
+         │   Is user in database?        │
+         └───────┬───────────────┬───────┘
+                 │               │
+            YES  │               │  NO (New User)
+                 │               │
+                 ▼               ▼
+    ┌────────────────────┐  ┌──────────────────────┐
+    │  Read from DB      │  │  Fetch from API      │
+    │  (Fast, cached)    │  │  (Initial 2000)      │
+    └────────┬───────────┘  └──────────┬───────────┘
+             │                         │
+             │                         ▼
+             │              ┌──────────────────────┐
+             │              │  Cache to Database   │
+             │              └──────────┬───────────┘
+             │                         │
+             │                         ▼
+             │              ┌──────────────────────┐
+             │              │  Start WebSocket     │
+             │              │  Subscription        │
+             │              └──────────────────────┘
+             │                         │
+             └─────────┬───────────────┘
+                       │
+                       ▼
+            ┌──────────────────────┐
+            │  Return to Client    │
+            └──────────────────────┘
+            
+┌─────────────────────────────────────────────────────────────┐
+│            WebSocket (Background Process)                   │
+│                                                              │
+│  New fill arrives → Cache to DB → Keep data fresh          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### WebSocket Management
+
+**FillSyncService** manages real-time subscriptions:
+
+```typescript
+class FillSyncService {
+  private activeSubscriptions: Map<string, () => void>;
+  
+  // Idempotent: Only starts sync if not already syncing
+  async ensureUserSyncing(user: string): Promise<void> {
+    if (!this.isSyncing(user)) {
+      await this.startSyncingUser(user);
+    }
+  }
+  
+  // Start real-time fill sync for a user
+  async startSyncingUser(user: string): Promise<void> {
+    const unsubscribe = await this.datasource.subscribeToUserFills(
+      user,
+      async (fills: Fill[]) => {
+        // Cache new fills to database
+        await userFillRepository.upsertMany(fills);
+      }
+    );
+    this.activeSubscriptions.set(user, unsubscribe);
+  }
+}
+```
+
+**Key Features**:
+- **Idempotent**: `ensureUserSyncing()` prevents duplicate subscriptions
+- **Auto-reconnect**: WebSocket automatically reconnects on disconnect
+- **Logging**: Shows distinct user count after each subscription
+- **Graceful shutdown**: Cleans up all subscriptions on server stop
+
+### Database Schema
+
+**user_fills table**:
+```sql
+CREATE TABLE user_fills (
+  user TEXT NOT NULL,
+  coin TEXT NOT NULL,
+  oid BIGINT NOT NULL,
+  tid BIGINT NOT NULL,
+  px TEXT NOT NULL,
+  sz TEXT NOT NULL,
+  side TEXT NOT NULL,
+  time BIGINT NOT NULL,
+  closed_pnl TEXT NOT NULL,
+  fee TEXT NOT NULL,
+  builder_fee TEXT,
+  start_position TEXT NOT NULL,
+  dir TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  crossed BOOLEAN,
+  fee_token TEXT,
+  
+  -- Indexes for query performance
+  INDEX idx_user_time (user, time),
+  INDEX idx_user_coin_time (user, coin, time),
+  
+  -- Prevent duplicates
+  UNIQUE (user, tid)
+);
+```
+
+**Why This Schema**:
+- **user + tid unique constraint**: Prevents duplicate fills
+- **Indexes on (user, time, coin)**: Fast queries for API endpoints
+- **TEXT for decimals**: Preserves precision (Hyperliquid uses string decimals)
+- **builder_fee nullable**: Only present when trade is builder-attributed
+
+### Startup User Configuration
+
+**Server startup** (`src/server.ts`):
+```typescript
+const STARTUP_USERS = [
+  '0x0e09b56ef137f417e424f1265425e93bfff77e17',
+  '0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
+  '0x6c8031a9eb4415284f3f89c0420f697c87168263',
+];
+
+async function startFillSync() {
+  const dbUsers = await userFillRepository.getDistinctUsers();
+  const allUsers = Array.from(new Set([...dbUsers, ...STARTUP_USERS]));
+  
+  for (const user of allUsers) {
+    const isInDb = dbUsers.includes(user);
+    
+    if (isInDb) {
+      // Backfill recent data (catch missed fills during downtime)
+      await ledgerService.backfillUser(user);
+    } else {
+      // Fetch initial data (first time seeing this user)
+      await ledgerService.getTrades({ user });
+    }
+    
+    // Ensure WebSocket subscription is active
+    await fillSyncService.ensureUserSyncing(user);
+  }
+}
+```
+
+**Benefits**:
+- Predefined users have data ready immediately
+- Database users are restored on restart
+- Avoids redundant API calls for existing users
+- Catches any missed fills during server downtime
 
 ## Hyperliquid Account Model
 
@@ -324,6 +557,13 @@ Returns ranked users by metric:
 
 **Metrics**: `volume`, `pnl`, `returnPct`
 
+**Dynamic User List**: The leaderboard pulls users from the database (users who have made API calls), not a hardcoded list. This ensures:
+- Only active users appear in leaderboard
+- Leaderboard updates automatically as new users make API calls
+- Empty array `[]` returned if no users in database
+
+**Query**: `getAllUsers()` → `userFillRepository.getDistinctUsers()` → Returns list of users with cached fills
+
 ### GET /v1/deposits
 
 Returns deposit history:
@@ -351,9 +591,15 @@ Returns deposit history:
 │                     Hyperliquid Public API                  │
 └──────────────┬──────────────────────────────────────────────┘
                │
-               ├─► userFills
-               │   - Returns all fills (perp + spot)
-               │   - closedPnl, fee, builderFee fields
+               ├─► userFills (REST API)
+               │   - Returns up to 2000 most recent fills
+               │   - Used for initial data fetch
+               │   - Supports time-range queries
+               │
+               ├─► userFills (WebSocket)
+               │   - Real-time fill updates
+               │   - Subscription-based
+               │   - Auto-reconnect on disconnect
                │
                ├─► userNonFundingLedgerUpdates  
                │   - Returns deposits/withdrawals/transfers
@@ -365,32 +611,53 @@ Returns deposit history:
                    
                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   LedgerDatasource                          │
+│                   PublicHLDatasource                        │
 │                                                              │
-│  getFills()         → Fetches & filters fills by time/coin  │
-│  getDeposits()      → Fetches ledger updates                │
-│  getEquityAt()      → Fetches account equity at timestamp   │
-│  getVolume()        → Calculates trading volume             │
+│  getFills()             → Fetches fills (REST)              │
+│  subscribeToUserFills() → WebSocket subscription           │
+│  getDeposits()          → Fetches ledger updates            │
+│  getEquityAt()          → Fetches account equity            │
+│  getAllUsers()          → Gets users from database          │
+└──────────────┬──────────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Database Layer                           │
+│                   (userFillRepository)                      │
+│                                                              │
+│  upsertMany()           → Cache fills (prevent duplicates)  │
+│  findByUser()           → Query cached fills               │
+│  getLatestTimestamp()   → Check if user has cached data    │
+│  getDistinctUsers()     → List all cached users            │
 └──────────────┬──────────────────────────────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    LedgerService                            │
 │                                                              │
+│  getTransformedFills()                                      │
+│  ├─► Check if user has cached data                         │
+│  ├─► If cached: Read from DB only (fast!)                  │
+│  ├─► If new: Fetch from API + cache + start WebSocket      │
+│  └─► Return fills with position tracking                   │
+│                                                              │
 │  transformFillsForPositions()                               │
-│  ├─► Tracks position state per coin (netSize, entry price) │
-│  └─► Adds netAfter, avgEntryPx to each fill                │
+│  ├─► Tracks position state per coin                        │
+│  └─► Adds netAfter, avgEntryPx to each fill               │
 │                                                              │
 │  buildPositionLifecycles()                                  │
-│  ├─► Groups fills into position lifecycles                  │
-│  ├─► Tracks builder/non-builder activity                   │
-│  ├─► Calculates taint status                               │
-│  └─► Aggregates realizedPnl, feesPaid, tradeCount          │
+│  ├─► Groups fills into position lifecycles                 │
+│  ├─► Tracks builder/non-builder activity                  │
+│  ├─► Calculates taint status                              │
+│  └─► Aggregates realizedPnl, feesPaid, tradeCount         │
+│                                                              │
+│  backfillUser()                                             │
+│  └─► Fetches recent fills to catch missed data            │
 │                                                              │
 │  getTrades()         → Normalized fills + builder label     │
 │  getPositionHistory() → Timeline snapshots                  │
 │  getPnl()            → Aggregated metrics                   │
-│  getLeaderboard()    → Ranked users                         │
+│  getLeaderboard()    → Ranked users (from DB)               │
 │  getDeposits()       → USDC deposit tracking                │
 └──────────────┬──────────────────────────────────────────────┘
                │
@@ -404,6 +671,58 @@ Returns deposit history:
 │  /v1/leaderboard     → LeaderboardController                │
 │  /v1/deposits        → DepositsController                   │
 └─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                 FillSyncService (Background)                │
+│                                                              │
+│  WebSocket → New Fill Event → Cache to DB → Keeps data fresh│
+│  Runs continuously for all subscribed users                 │
+│  Auto-reconnects on disconnect                              │
+│  Idempotent subscription management                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Complete Request Flow Examples
+
+**Example 1: First API call for a new user**
+```
+1. Client: GET /v1/trades?user=0xABC
+2. LedgerService: Check if user has cached data
+   → getLatestTimestamp(0xABC) → null (not in DB)
+3. LedgerService: Fetch from Hyperliquid API
+   → getFills(user=0xABC) → 2000 fills
+4. LedgerService: Cache to database
+   → upsertMany(2000 fills) → DB write
+5. LedgerService: Start WebSocket subscription
+   → ensureUserSyncing(0xABC) → WebSocket subscribe
+6. Return: 2000 fills to client
+7. Background: WebSocket listens for new fills
+```
+
+**Example 2: Subsequent call for existing user**
+```
+1. Client: GET /v1/trades?user=0xABC
+2. LedgerService: Check if user has cached data
+   → getLatestTimestamp(0xABC) → 1768665950720 (exists!)
+3. LedgerService: Read from database
+   → findByUser(0xABC) → 2000 fills (fast!)
+4. Return: 2000 fills to client
+5. No API call to Hyperliquid (WebSocket keeps it fresh)
+```
+
+**Example 3: Server restart**
+```
+1. Server starts
+2. Load predefined users: [0xABC, 0xDEF, 0xGHI]
+3. Load database users: [0xABC] (existing from previous run)
+4. Merge: [0xABC, 0xDEF, 0xGHI] (remove duplicates)
+5. For 0xABC (in DB):
+   → backfillUser() → Fetch recent fills (catch missed data)
+   → ensureUserSyncing() → Start WebSocket
+6. For 0xDEF, 0xGHI (not in DB):
+   → getTrades() → Fetch initial 2000 fills + cache
+   → ensureUserSyncing() → Start WebSocket
+7. Server ready with 3 users syncing
 ```
 
 ## Multi-Coin Aggregation
@@ -442,11 +761,126 @@ This enables both:
 # Required
 TARGET_BUILDER=your-builder-name  # Label for builder attribution in responses
 
+# Database Configuration (Docker or Local)
+DB_HOST=localhost                 # Database host
+DB_PORT=5432                      # Database port
+DB_USER=postgres                  # Database user
+DB_PASS=postgres                  # Database password
+DB_NAME=platypus                  # Database name
+
 # Optional
 PORT=3000                         # API server port (default: 3000)
 ```
 
 **Note**: `TARGET_BUILDER` is used as a display label when trades have `builderFee`, but the actual builder detection is based on the presence of the `builderFee` field (the public API doesn't expose builder addresses).
+
+## Docker Deployment
+
+### Two Deployment Options
+
+**Option 1: Local Development (Database Only)**
+```bash
+docker-compose -f docker-compose.local.yml up -d
+npm run dev
+```
+- PostgreSQL + pgAdmin in Docker
+- Node.js app runs locally
+- Uses `postgres_data_local` volume
+- Best for development
+
+**Option 2: Full Production Stack**
+```bash
+docker-compose up -d
+```
+- Everything in Docker (DB + App + pgAdmin)
+- Uses `postgres_data` volume
+- Best for production deployment
+
+**Database Volumes**:
+- `postgres_data_local`: Local development database (separate)
+- `postgres_data`: Production database (separate)
+- Both can run simultaneously without conflicts
+
+**pgAdmin Access**:
+- URL: http://localhost:5050
+- Email: admin@admin.com
+- Password: admin
+
+## Performance Optimizations
+
+### 1. Database Caching
+- **First call**: Fetch from API + cache (slow)
+- **Subsequent calls**: Read from DB only (fast!)
+- **Typical speedup**: 10-50x faster for cached users
+
+### 2. WebSocket Real-time Sync
+- Keeps database fresh automatically
+- No need to poll API
+- Reduces API load significantly
+- Auto-reconnects on disconnect
+
+### 3. Smart Startup Strategy
+- Predefined users: Pre-fetched on startup
+- Database users: Backfill only (not full refetch)
+- Idempotent subscriptions: No duplicates
+
+### 4. Database Indexes
+```sql
+-- Fast user queries
+INDEX idx_user_time ON user_fills (user, time);
+
+-- Fast coin-specific queries  
+INDEX idx_user_coin_time ON user_fills (user, coin, time);
+
+-- Prevent duplicates
+UNIQUE INDEX ON user_fills (user, tid);
+```
+
+### 5. Batch Processing
+- Database writes: Batched (100 fills per batch)
+- API fetches: Parallel time-range queries
+- WebSocket updates: Real-time (no batching needed)
+
+## Monitoring and Logging
+
+### Startup Logs
+```
+🔄 Starting fill sync service...
+📋 Found 1 users in database, 3 predefined users (3 total unique)
+🔄 Fetching initial data for 0x0e09b56ef137f417e424f1265425e93bfff77e17...
+💾 Caching 2000 fills for 0x0e09b56ef137f417e424f1265425e93bfff77e17
+✅ Cached 2000 fills for 0x0e09b56ef137f417e424f1265425e93bfff77e17
+🔄 Ensuring WebSocket sync for 0x0e09b56ef137f417e424f1265425e93bfff77e17...
+✅ Subscribed to fills for 0x0e09b56ef137f417e424f1265425e93bfff77e17 (now syncing 1 users)
+✅ Fill sync started for 3 users
+```
+
+### WebSocket Logs
+```
+Connecting to Hyperliquid WebSocket...
+✅ Hyperliquid WebSocket connected
+Resubscribing to 0 feeds...  ← Normal on fresh connection
+✅ Subscribed to fills for 0xABC (now syncing 1 users)
+Subscription confirmed: userFills
+```
+
+### Runtime Logs
+```
+🆕 New user detected: 0xDEF, fetching initial data...
+💾 Caching 2000 fills for 0xDEF
+✅ Cached 2000 fills for 0xDEF
+✅ Subscribed to fills for 0xDEF (now syncing 2 users)
+
+ℹ️  Already syncing 0xABC (2 total users)  ← Idempotent check
+✅ Synced 5 fills for 0xABC  ← Real-time update
+```
+
+### Key Metrics to Monitor
+- **Distinct user count**: How many users are actively syncing
+- **Cache hit rate**: DB reads vs API calls
+- **WebSocket reconnections**: Should be rare
+- **Database write performance**: Batch insert times
+- **API response times**: Should be <100ms for cached users
 
 ## Testing
 
