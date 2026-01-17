@@ -191,15 +191,21 @@ export class LedgerService {
    * Enables filtering users who reloaded capital during competition window.
    * Important for fair competition - users who deposit mid-competition
    * should be flagged or excluded from certain leaderboards.
+   * 
+   * Returns: totalDeposits, depositCount, deposits[]
+   * Note: Only positive transfers (deposits) are returned, withdrawals are filtered out.
    */
   async getDeposits(params: {
     user: string;
     fromMs?: number;
     toMs?: number;
   }) {
-    const deposits = await this.datasource.getDeposits(params);
+    const allTransfers = await this.datasource.getDeposits(params);
     
-    // Calculate total deposits
+    // Filter to only deposits (positive amounts)
+    const deposits = allTransfers.filter(d => d.type === 'deposit');
+    
+    // Calculate total
     const totalDeposits = deposits.reduce((sum, d) => {
       return sum + parseFloat(d.amount || '0');
     }, 0);
@@ -211,7 +217,6 @@ export class LedgerService {
         timeMs: d.time,
         amount: d.amount,
         coin: d.coin,
-        txHash: d.txHash,
       })),
     };
   }
@@ -427,11 +432,6 @@ export class LedgerService {
           timeMs: fill.timeMs,
           netSize: fill.netAfter,
           avgEntryPx: fill.avgEntryPx,
-          // Risk fields (bonus feature)
-          // Note: liqPx and marginUsed require additional API calls to get current position state
-          // These are placeholders - implement when position state API is available
-          liqPx: fill.liqPx || undefined,  // Liquidation price (if available in fill data)
-          marginUsed: fill.marginUsed || undefined,  // Margin used (if available in fill data)
         };
 
         // Include tainted flag when builderOnly mode is enabled

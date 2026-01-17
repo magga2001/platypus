@@ -195,6 +195,47 @@ export class HyperliquidClient {
 		return payload;
 	}
 
+	/**
+	 * Get user's clearinghouse state including positions with risk data.
+	 * POST /info with type="clearinghouseState"
+	 * 
+	 * Returns positions with liquidation prices, margin used, leverage, etc.
+	 */
+	async getClearinghouseState(user: string): Promise<any> {
+		const body = {
+			type: 'clearinghouseState',
+			user,
+		};
+
+		const payload = await this.postJson<any>('/info', body);
+		return payload;
+	}
+
+	/**
+	 * Get user's non-funding ledger updates (deposits, withdrawals, transfers).
+	 * POST /info with type="userNonFundingLedgerUpdates"
+	 * 
+	 * Returns all ledger updates excluding funding payments.
+	 * This includes deposits (type="deposit"), withdrawals (type="withdraw"),
+	 * and internal transfers between spot and perp accounts.
+	 */
+	async getUserNonFundingLedgerUpdates(user: string, startTime?: number, endTime?: number): Promise<any[]> {
+		const body: any = {
+			type: 'userNonFundingLedgerUpdates',
+			user,
+		};
+
+		if (startTime !== undefined) {
+			body.startTime = startTime;
+		}
+		if (endTime !== undefined) {
+			body.endTime = endTime;
+		}
+
+		const payload = await this.postJson<any>('/info', body);
+		return Array.isArray(payload) ? payload : [];
+	}
+
 }
 
 export const defaultHyperliquidClient = new HyperliquidClient({
@@ -202,4 +243,3 @@ export const defaultHyperliquidClient = new HyperliquidClient({
 });
 
 export default HyperliquidClient;
-

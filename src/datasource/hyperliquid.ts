@@ -39,12 +39,29 @@ export interface GetDepositsParams {
 	toMs?: number;
 }
 
+export interface Position {
+	coin: string;
+	szi: string;            // Position size
+	leverage: {
+		type: string;
+		value: number;
+	};
+	liquidationPx?: string; // Liquidation price
+	marginUsed: string;     // Margin used for this position
+	maxLeverage: number;
+	positionValue: string;
+	returnOnEquity: string;
+	unrealizedPnl: string;
+	entryPx?: string;      // Entry price
+}
+
 export interface LedgerDatasource {
 	getFills(params: GetFillsParams): Promise<Fill[]>;
 	getEquityAt(user: string, atMs?: number): Promise<number>;
 	getAllUsers(): Promise<string[]>;
 	getVolume(params: GetVolumeParams): Promise<number>;
 	getDeposits(params: GetDepositsParams): Promise<Deposit[]>;
+	getCurrentPositions(user: string): Promise<Position[]>;
 }
 
 export class PublicHLDatasource implements LedgerDatasource {
@@ -261,73 +278,104 @@ export class PublicHLDatasource implements LedgerDatasource {
 
 	/**
 	 * Get deposits/withdrawals for a user.
-	 * Uses Hyperliquid API's userFunding endpoint to retrieve transfers.
 	 * 
-	 * Note: This endpoint may not be available in public API or may require
-	 * authentication. If not available, this will return empty array.
+	 * Uses the userNonFundingLedgerUpdates endpoint which provides actual
+	 * deposit/withdrawal transactions (not inferred from portfolio changes).
+	 * 
+	 * This endpoint returns ledger updates including:
+	 * - Deposits: type="deposit" with usdc field
+	 * - Withdrawals: type="withdraw" with usdc field
+	 * - Internal transfers: type="accountClassTransfer", type="spotTransfer", etc.
 	 */
 	async getDeposits(params: GetDepositsParams): Promise<Deposit[]> {
 		try {
 			const { user, fromMs, toMs } = params;
 			
-			// Call Hyperliquid API for funding history
-			const fundingData = await defaultHyperliquidClient.getUserFunding(
+			// Get all non-funding ledger updates
+			const ledger = await defaultHyperliquidClient.getUserNonFundingLedgerUpdates(
 				user,
 				fromMs,
 				toMs
 			);
 
-			// Parse the response and extract deposits
-			// The exact structure depends on Hyperliquid API response format
-			if (!fundingData || !Array.isArray(fundingData)) {
-				console.warn(`No funding data available for user ${user}`);
+			if (!Array.isArray(ledger) || ledger.length === 0) {
 				return [];
 			}
 
-			// Transform API response to Deposit format
-			const deposits: Deposit[] = fundingData
-				.filter((item: any) => {
-					// Filter by time range if specified
-					if (fromMs && item.time < fromMs) return false;
-					if (toMs && item.time > toMs) return false;
-					return true;
-				})
-				.map((item: any) => ({
-					time: item.time || item.timestamp,
-					amount: item.amount || item.usd || '0',
-					coin: item.coin || item.token || 'USDC',
-					txHash: item.hash || item.txHash,
-					type: this.determineDepositType(item),
-				}))
-				.filter((d: Deposit) => d.type === 'deposit'); // Only return deposits, not withdrawals
+			// Extract deposits and withdrawals
+			const deposits: Deposit[] = [];
+			
+			for (const entry of ledger) {
+				if (!entry || !entry.delta || !entry.delta.type) continue;
 
-			return deposits;
+				const { time, delta, hash } = entry;
+				
+				// Handle deposits
+				if (delta.type === 'deposit' && delta.usdc) {
+					deposits.push({
+						time,
+						amount: delta.usdc,
+						coin: 'USDC',
+						txHash: hash !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? hash : undefined,
+						type: 'deposit',
+					});
+				}
+				
+				// Handle withdrawals
+				else if (delta.type === 'withdraw' && delta.usdc) {
+					deposits.push({
+						time,
+						amount: delta.usdc,
+						coin: 'USDC',
+						txHash: hash !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? hash : undefined,
+						type: 'withdrawal',
+					});
+				}
+			}
+
+			// Return deposits and withdrawals sorted by time (newest first)
+			return deposits.sort((a, b) => b.time - a.time);
 
 		} catch (error) {
 			console.warn(`Failed to get deposits for user ${params.user}:`, error);
-			// If API endpoint not available or fails, return empty array
 			return [];
 		}
 	}
 
 	/**
-	 * Helper to determine if a funding event is a deposit, withdrawal, or transfer.
+	 * Get current open positions for a user with risk data.
+	 * 
+	 * Fetches clearinghouse state which includes:
+	 * - Position size and direction
+	 * - Liquidation price
+	 * - Margin used
+	 * - Leverage
+	 * - Unrealized PnL
 	 */
-	private determineDepositType(item: any): 'deposit' | 'withdrawal' | 'transfer' {
-		// Check various fields that might indicate type
-		if (item.type) {
-			const t = item.type.toLowerCase();
-			if (t.includes('deposit')) return 'deposit';
-			if (t.includes('withdraw')) return 'withdrawal';
-			if (t.includes('transfer')) return 'transfer';
+	async getCurrentPositions(user: string): Promise<Position[]> {
+		try {
+			const state = await defaultHyperliquidClient.getClearinghouseState(user);
+			
+			if (!state || !state.assetPositions) {
+				return [];
+			}
+
+			return state.assetPositions.map((pos: any) => ({
+				coin: pos.position.coin,
+				szi: pos.position.szi,
+				leverage: pos.position.leverage,
+				liquidationPx: pos.position.liquidationPx,
+				marginUsed: pos.position.marginUsed,
+				maxLeverage: pos.position.maxLeverage,
+				positionValue: pos.position.positionValue,
+				returnOnEquity: pos.position.returnOnEquity,
+				unrealizedPnl: pos.position.unrealizedPnl,
+				entryPx: pos.position.entryPx,
+			}));
+
+		} catch (error) {
+			console.warn(`Failed to get current positions for user ${user}:`, error);
+			return [];
 		}
-
-		// Check if amount is positive (deposit) or negative (withdrawal)
-		const amount = parseFloat(item.amount || item.usd || '0');
-		if (amount > 0) return 'deposit';
-		if (amount < 0) return 'withdrawal';
-
-		// Default to deposit
-		return 'deposit';
 	}
 }
