@@ -43,6 +43,8 @@ export class LedgerService {
       fee: f.fee,
       closedPnl: f.closedPnl,
       builder: f.builderFee ? TARGET_BUILDER : undefined, // If builderFee exists, attribute to TARGET_BUILDER
+      oid: f.oid, // Order ID
+      tid: f.tid, // Trade ID
     }));
 
     // If builder-only mode, filter to only builder-attributed trades
@@ -67,9 +69,12 @@ export class LedgerService {
     // Get lifecycles (reusable internal method)
     const lifecycles = await this.getPositionLifecycles(params);
 
-    return lifecycles
-      .filter((l) => !params.builderOnly || l.builderOnly)
-      .flatMap((l) => l.timeline);
+    // Filter by builderOnly if specified, and exclude tainted lifecycles
+    const filtered = params.builderOnly
+      ? lifecycles.filter((l) => l.builderOnly && !l.tainted)
+      : lifecycles;
+
+    return filtered.flatMap((l) => l.timeline);
   }
 
   /* =========================
@@ -101,6 +106,7 @@ export class LedgerService {
     const feesPaid = eligible.reduce((sum, l) => sum + l.feesPaid, 0);
 
     const tradeCount = eligible.reduce((sum, l) => sum + l.tradeCount, 0);
+    const fillCount = eligible.reduce((sum, l) => sum + l.fillCount, 0);
 
     // Spec: effectiveCapital = min(equityAtFromMs, maxStartCapital)
     // If maxStartCapital not specified, use actual equityAtFromMs
@@ -113,8 +119,13 @@ export class LedgerService {
       returnPct:
         effectiveCapital > 0 ? (realizedPnl / effectiveCapital) * 100 : 0,
       feesPaid,
-      tradeCount,
+      tradeCount, // Unique trades (by oid - Order ID)
+      fillCount, // Total fills
       tainted: params.builderOnly ? lifecycles.some((l) => l.tainted) : false,
+      // Metadata: show which capital source was used
+      effectiveCapital,
+      capitalSource: params.maxStartCapital !== undefined ? 'maxStartCapital' : 'equityAtFromMs',
+      equityAtFromMs, // Always show actual equity found (even if maxStartCapital was used)
     };
   }
 
@@ -149,13 +160,15 @@ export class LedgerService {
             coin: params.coin,
             fromMs: params.fromMs,
             toMs: params.toMs,
+            builderOnly: params.builderOnly,
           });
         }
 
         return {
           user,
           metricValue,
-          tradeCount: pnl.tradeCount,
+          tradeCount: pnl.tradeCount, // Unique trades (by tid)
+          fillCount: pnl.fillCount, // Total fills
           tainted: pnl.tainted,
         };
       }),
@@ -374,6 +387,12 @@ export class LedgerService {
           current.hasNonBuilder = true;
         }
 
+        // Track unique trades by oid (Order ID)
+        // Multiple fills can share the same oid when an order is partially filled
+        if (fill.oid !== undefined && fill.oid !== null) {
+          current.uniqueOrderIds.add(fill.oid);
+        }
+
         // Add timeline entry
         const timelineEntry: any = {
           timeMs: fill.timeMs,
@@ -391,7 +410,7 @@ export class LedgerService {
         current.timeline.push(timelineEntry);
 
         // Accumulate lifecycle stats
-        current.tradeCount++;
+        current.fillCount++; // Count total fills
         const fee = parseFloat(fill.fee || '0');
         current.feesPaid += fee;
         const closedPnl = parseFloat(fill.closedPnl || '0');
@@ -399,6 +418,9 @@ export class LedgerService {
 
         // Check if position closed (netAfter === 0)
         if (fill.netAfter === 0) {
+          // Set tradeCount to unique order count before finalizing
+          current.tradeCount = current.uniqueOrderIds.size;
+
           // Determine final tainted and builderOnly status
           current.tainted =
             current.hasNonBuilder && current.hasBuilder;
@@ -420,6 +442,9 @@ export class LedgerService {
 
     // Handle open positions (lifecycle that hasn't closed)
     if (current) {
+      // Set tradeCount to unique order count before finalizing
+      current.tradeCount = current.uniqueOrderIds.size;
+
       // Set final tainted status for open position
       current.tainted = current.hasNonBuilder && current.hasBuilder;
       current.builderOnly = current.hasBuilder && !current.tainted;
@@ -443,7 +468,9 @@ export class LedgerService {
       timeline: [],
       realizedPnl: 0,
       feesPaid: 0,
-      tradeCount: 0,
+      tradeCount: 0, // Will be set to uniqueOrderIds.size when lifecycle closes
+      fillCount: 0, // Total fills in this lifecycle
+      uniqueOrderIds: new Set<number>(), // Track unique order IDs (oid) - multiple fills can share same oid
       hasBuilder: this.isBuilderTrade(fill),
       hasNonBuilder: !this.isBuilderTrade(fill),
       tainted: false,

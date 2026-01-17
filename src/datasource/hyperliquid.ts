@@ -23,6 +23,7 @@ export interface GetVolumeParams {
 	coin?: string;
 	fromMs?: number;
 	toMs?: number;
+	builderOnly?: boolean;
 }
 
 export interface LedgerDatasource {
@@ -219,7 +220,7 @@ export class PublicHLDatasource implements LedgerDatasource {
 	/**
 	 * Calculate total volume for a user.
 	 * Volume is computed from fills by summing notional value (price * size).
-	 * Applies coin and time filters if provided.
+	 * Applies coin, time, and builderOnly filters if provided.
 	 */
 	async getVolume(params: GetVolumeParams): Promise<number> {
 		const fills = await this.getFills({
@@ -231,7 +232,14 @@ export class PublicHLDatasource implements LedgerDatasource {
 		// Filter by coin if specified (Hyperliquid API doesn't filter at request level)
 		let filteredFills = fills;
 		if (params.coin) {
-			filteredFills = fills.filter((fill) => fill.coin === params.coin);
+			filteredFills = filteredFills.filter((fill) => fill.coin === params.coin);
+		}
+
+		// Filter by builderOnly if specified (only builder-attributed trades)
+		if (params.builderOnly) {
+			filteredFills = filteredFills.filter((fill) =>
+				fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0
+			);
 		}
 
 		// Sum notional value: price * size for each fill
