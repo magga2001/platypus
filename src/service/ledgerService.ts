@@ -193,6 +193,38 @@ export class LedgerService {
   }
 
   /* =========================
+     Deposits (Bonus Feature)
+     ========================= */
+
+  /**
+   * Get deposit history for a user (optional bonus feature).
+   * 
+   * API Spec: GET /v1/deposits?user=&fromMs=&toMs=
+   * Returns: totalDeposits, depositCount, deposits[]
+   * 
+   * Note: Hyperliquid public API doesn't expose deposit data directly.
+   * This is a placeholder implementation that would need:
+   * - Access to on-chain deposit events, or
+   * - Enhanced/private API access
+   */
+  async getDeposits(params: {
+    user: string;
+    fromMs?: number;
+    toMs?: number;
+  }) {
+    // TODO: Implement when deposit data is available via:
+    // - On-chain event parsing (smart contract deposits)
+    // - Enhanced Hyperliquid API endpoint
+    // - Separate deposit tracking service
+    
+    return {
+      totalDeposits: '0',
+      depositCount: 0,
+      deposits: [],
+    };
+  }
+
+  /* =========================
      Internal helpers
      ========================= */
 
