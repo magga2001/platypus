@@ -223,9 +223,7 @@ export class LedgerService {
           ? lifecycles.filter((l) => l.builderOnly && !l.tainted)
           : lifecycles;
 
-        const isTainted = params.builderOnly
-          ? lifecycles.some((l) => l.tainted)
-          : false;
+        const isTainted = lifecycles.some((l) => l.tainted);
 
         // Use cached equity (already fetched once if needed)
         const equityAtFromMs = equityCache[user] || 0;
@@ -321,28 +319,33 @@ export class LedgerService {
    */
   async backfillUser(user: string) {
     const normalizedUser = user.toLowerCase();
-    
+
     // Get latest timestamp from database
-    const latestDbTimestamp = await this.userFillRepo.getLatestTimestamp(normalizedUser);
-    
+    const latestDbTimestamp =
+      await this.userFillRepo.getLatestTimestamp(normalizedUser);
+
     if (latestDbTimestamp === null) {
-      console.log(`  ℹ️  ${normalizedUser}: No cached data, will fetch on first request`);
+      console.log(
+        `  ℹ️  ${normalizedUser}: No cached data, will fetch on first request`,
+      );
       return;
     }
-    
+
     // Fetch only new fills from API (after latest cached timestamp)
     const newFillsFromApi = await this.datasource.getFills({
       user: normalizedUser,
       fromMs: latestDbTimestamp + 1,
     });
-    
+
     if (newFillsFromApi.length === 0) {
       console.log(`  ✅ ${normalizedUser}: Cache is up to date`);
       return;
     }
-    
-    console.log(`  ⚠️  ${normalizedUser}: Found ${newFillsFromApi.length} new fills, backfilling...`);
-    
+
+    console.log(
+      `  ⚠️  ${normalizedUser}: Found ${newFillsFromApi.length} new fills, backfilling...`,
+    );
+
     const newFills: NewUserFill[] = newFillsFromApi.map((f) => ({
       user: normalizedUser,
       coin: f.coin,
@@ -359,14 +362,16 @@ export class LedgerService {
       dir: f.dir,
       hash: f.hash,
     }));
-    
+
     try {
       const BATCH_SIZE = 100;
       for (let i = 0; i < newFills.length; i += BATCH_SIZE) {
         const batch = newFills.slice(i, i + BATCH_SIZE);
         await this.userFillRepo.upsertMany(batch);
       }
-      console.log(`  ✅ ${normalizedUser}: Backfilled ${newFillsFromApi.length} fills`);
+      console.log(
+        `  ✅ ${normalizedUser}: Backfilled ${newFillsFromApi.length} fills`,
+      );
     } catch (error) {
       console.error(`  ❌ ${normalizedUser}: Failed to backfill:`, error);
     }
@@ -398,7 +403,7 @@ export class LedgerService {
    * netAfter (position size after fill) and avgEntryPx (weighted average entry price).
    *
    * Used by getTrades, getPositionHistory, and getPnl to avoid code duplication.
-   * 
+   *
    * Runtime behavior:
    * - If user has cached data: Read from DB only (WebSocket keeps it fresh)
    * - If new user: Fetch from API and cache (will start WebSocket sync automatically)
@@ -444,8 +449,10 @@ export class LedgerService {
       }));
     } else {
       // New user - fetch all from API and cache
-      console.log(`🆕 New user detected: ${normalizedUser}, fetching initial data...`);
-      
+      console.log(
+        `🆕 New user detected: ${normalizedUser}, fetching initial data...`,
+      );
+
       fills = await this.datasource.getFills(params);
 
       // Cache all fills in database for future requests
@@ -476,7 +483,7 @@ export class LedgerService {
             await this.userFillRepo.upsertMany(batch);
           }
           console.log(`✅ Cached ${fills.length} fills for ${normalizedUser}`);
-          
+
           // Ensure WebSocket sync is started (idempotent - won't duplicate)
           fillSyncService.ensureUserSyncing(normalizedUser).catch((error) => {
             console.error(`Failed to start sync for ${normalizedUser}:`, error);
