@@ -57,7 +57,7 @@ export class LedgerService {
 
     // If builder-only mode, filter to only builder-attributed trades
     if (params.builderOnly) {
-      return normalizedTrades.filter((t) => t.builder);
+      return normalizedTrades.filter((t) => t.builderAttributed);
     }
 
     return normalizedTrades;
@@ -229,24 +229,21 @@ export class LedgerService {
      ========================= */
 
   /**
-   * Check if a fill is attributed to the configured TARGET_BUILDER.
-   *
+   * Check if a fill is attributed to a builder.
+   * 
    * According to Hyperliquid API spec:
    * - builderFee field is present (and > 0) when trade is builder-attributed
    * - The specific builder address is not returned in the API response
    *
    * Note: Since the public API doesn't expose the actual builder address,
    * we check for presence of builderFee as "best effort" attribution.
-   * For exact builder matching, would need access to private/enhanced API.
+   * TARGET_BUILDER is used as a label in responses, but builder detection
+   * works based on builderFee presence, not TARGET_BUILDER value.
    */
   private isBuilderTrade(fill: any): boolean {
-    if (!TARGET_BUILDER) return false;
-
     // Check if builderFee field exists and is > 0
-    // This indicates the trade was attributed to a builder
-    return (
-      fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0
-    );
+    // This indicates the trade was attributed to a builder (any builder)
+    return fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0;
   }
 
   /**
