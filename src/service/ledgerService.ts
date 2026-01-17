@@ -30,12 +30,8 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
-    // Fetch fills from datasource (time filtering happens at API level)
-    const fills = await this.datasource.getFills(params);
-
-    // Transform fills to include position tracking fields (netSize, avgEntryPx)
-    // Do this before coin filtering to ensure accurate position state tracking
-    const transformedFills = this.transformFillsForPositions(fills);
+    // Get transformed fills with position tracking
+    const transformedFills = await this.getTransformedFills(params);
 
     // Filter by coin if specified (after transformation)
     let filteredFills = transformedFills;
@@ -74,10 +70,8 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
-    const fills = await this.datasource.getFills(params);
-
-    // Transform fills to include calculated position fields
-    const transformedFills = this.transformFillsForPositions(fills);
+    // Get transformed fills with position tracking
+    const transformedFills = await this.getTransformedFills(params);
 
     // Build position lifecycles with builderOnly flag
     const lifecycles = this.buildPositionLifecycles(
@@ -102,14 +96,13 @@ export class LedgerService {
     builderOnly?: boolean;
     maxStartCapital?: number;
   }) {
-    const fills = await this.datasource.getFills(params);
+    // Get transformed fills with position tracking
+    const transformedFills = await this.getTransformedFills(params);
+
     const equityAtFromMs = await this.datasource.getEquityAt(
       params.user,
       params.fromMs,
     );
-
-    // Transform fills to include calculated position fields
-    const transformedFills = this.transformFillsForPositions(fills);
 
     // Build position lifecycles with builderOnly flag
     const lifecycles = this.buildPositionLifecycles(
@@ -198,6 +191,24 @@ export class LedgerService {
   /* =========================
      Internal helpers
      ========================= */
+
+  /**
+   * Internal helper: Get transformed fills with position tracking fields.
+   * This fetches fills from the datasource and transforms them to include
+   * netAfter (position size after fill) and avgEntryPx (weighted average entry price).
+   * 
+   * Used by getTrades, getPositionHistory, and getPnl to avoid code duplication.
+   */
+  private async getTransformedFills(params: {
+    user: string;
+    coin?: string;
+    fromMs?: number;
+    toMs?: number;
+    builderOnly?: boolean;
+  }) {
+    const fills = await this.datasource.getFills(params);
+    return this.transformFillsForPositions(fills);
+  }
 
   /**
    * Check if a fill is attributed to a builder.
