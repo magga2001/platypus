@@ -25,11 +25,26 @@ export interface GetVolumeParams {
 	toMs?: number;
 }
 
+export interface Deposit {
+	time: number;           // Timestamp in milliseconds
+	amount: string;         // Deposit amount
+	coin: string;           // Coin deposited (e.g., "USDC")
+	txHash?: string;        // Transaction hash
+	type: 'deposit' | 'withdrawal' | 'transfer';
+}
+
+export interface GetDepositsParams {
+	user: string;
+	fromMs?: number;
+	toMs?: number;
+}
+
 export interface LedgerDatasource {
 	getFills(params: GetFillsParams): Promise<Fill[]>;
 	getEquityAt(user: string, atMs?: number): Promise<number>;
 	getAllUsers(): Promise<string[]>;
 	getVolume(params: GetVolumeParams): Promise<number>;
+	getDeposits(params: GetDepositsParams): Promise<Deposit[]>;
 }
 
 export class PublicHLDatasource implements LedgerDatasource {
@@ -242,5 +257,77 @@ export class PublicHLDatasource implements LedgerDatasource {
 		}, 0);
 
 		return volume;
+	}
+
+	/**
+	 * Get deposits/withdrawals for a user.
+	 * Uses Hyperliquid API's userFunding endpoint to retrieve transfers.
+	 * 
+	 * Note: This endpoint may not be available in public API or may require
+	 * authentication. If not available, this will return empty array.
+	 */
+	async getDeposits(params: GetDepositsParams): Promise<Deposit[]> {
+		try {
+			const { user, fromMs, toMs } = params;
+			
+			// Call Hyperliquid API for funding history
+			const fundingData = await defaultHyperliquidClient.getUserFunding(
+				user,
+				fromMs,
+				toMs
+			);
+
+			// Parse the response and extract deposits
+			// The exact structure depends on Hyperliquid API response format
+			if (!fundingData || !Array.isArray(fundingData)) {
+				console.warn(`No funding data available for user ${user}`);
+				return [];
+			}
+
+			// Transform API response to Deposit format
+			const deposits: Deposit[] = fundingData
+				.filter((item: any) => {
+					// Filter by time range if specified
+					if (fromMs && item.time < fromMs) return false;
+					if (toMs && item.time > toMs) return false;
+					return true;
+				})
+				.map((item: any) => ({
+					time: item.time || item.timestamp,
+					amount: item.amount || item.usd || '0',
+					coin: item.coin || item.token || 'USDC',
+					txHash: item.hash || item.txHash,
+					type: this.determineDepositType(item),
+				}))
+				.filter((d: Deposit) => d.type === 'deposit'); // Only return deposits, not withdrawals
+
+			return deposits;
+
+		} catch (error) {
+			console.warn(`Failed to get deposits for user ${params.user}:`, error);
+			// If API endpoint not available or fails, return empty array
+			return [];
+		}
+	}
+
+	/**
+	 * Helper to determine if a funding event is a deposit, withdrawal, or transfer.
+	 */
+	private determineDepositType(item: any): 'deposit' | 'withdrawal' | 'transfer' {
+		// Check various fields that might indicate type
+		if (item.type) {
+			const t = item.type.toLowerCase();
+			if (t.includes('deposit')) return 'deposit';
+			if (t.includes('withdraw')) return 'withdrawal';
+			if (t.includes('transfer')) return 'transfer';
+		}
+
+		// Check if amount is positive (deposit) or negative (withdrawal)
+		const amount = parseFloat(item.amount || item.usd || '0');
+		if (amount > 0) return 'deposit';
+		if (amount < 0) return 'withdrawal';
+
+		// Default to deposit
+		return 'deposit';
 	}
 }

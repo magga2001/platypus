@@ -171,6 +171,30 @@ export class HyperliquidClient {
 		return payload;
 	}
 
+	/**
+	 * Get user funding history (deposits/withdrawals).
+	 * POST /info with type="userFunding"
+	 * 
+	 * Note: This endpoint may require authentication or may not be available
+	 * in the public API. Returns transfers, deposits, withdrawals.
+	 */
+	async getUserFunding(user: string, startTime?: number, endTime?: number): Promise<any> {
+		const body: any = {
+			type: 'userFunding',
+			user,
+		};
+
+		if (startTime !== undefined) {
+			body.startTime = startTime;
+		}
+		if (endTime !== undefined) {
+			body.endTime = endTime;
+		}
+
+		const payload = await this.postJson<any>('/info', body);
+		return payload;
+	}
+
 }
 
 export const defaultHyperliquidClient = new HyperliquidClient({
