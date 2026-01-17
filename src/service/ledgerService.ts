@@ -52,11 +52,7 @@ export class LedgerService {
       sz: f.sz,
       fee: f.fee,
       closedPnl: f.closedPnl,
-      builder: f.builderFee ? (TARGET_BUILDER || 'builder') : undefined, // If builderFee exists, use TARGET_BUILDER as label or 'builder'
-      builderAttributed: this.isBuilderTrade(f),
-      // Position tracking fields
-      netSize: f.netAfter, // Position size after this fill
-      avgEntryPx: f.avgEntryPx, // Weighted average entry price
+      builder: f.builderFee ? TARGET_BUILDER : undefined, // If builderFee exists, attribute to TARGET_BUILDER
     }));
 
     // If builder-only mode, filter to only builder-attributed trades
