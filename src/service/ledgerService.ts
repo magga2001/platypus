@@ -57,7 +57,7 @@ export class LedgerService {
 
     // If builder-only mode, filter to only builder-attributed trades
     if (params.builderOnly) {
-      return normalizedTrades.filter((t) => t.builderAttributed);
+      return normalizedTrades.filter((t) => t.builder !== undefined);
     }
 
     return normalizedTrades;
@@ -128,7 +128,6 @@ export class LedgerService {
     const tradeCount = eligible.reduce((sum, l) => sum + l.tradeCount, 0);
 
     // Use maxStartCapital if provided, otherwise fall back to equityAtFromMs
-    // Since equityAtFromMs is 0 (API limitation), maxStartCapital will be used when provided
     const effectiveCapital = params.maxStartCapital ?? equityAtFromMs;
 
     return {
@@ -138,6 +137,10 @@ export class LedgerService {
       feesPaid,
       tradeCount,
       tainted: params.builderOnly ? lifecycles.some((l) => l.tainted) : false,
+      // Metadata: show which capital source was used
+      effectiveCapital,
+      capitalSource: params.maxStartCapital !== undefined ? 'maxStartCapital' : 'equityAtFromMs',
+      equityAtFromMs, // Always show actual equity found (even if maxStartCapital was used)
     };
   }
 

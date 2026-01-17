@@ -38,26 +38,75 @@ export class PublicHLDatasource implements LedgerDatasource {
 	/**
 	 * Fetch fills from Hyperliquid API.
 	 * Chooses the appropriate endpoint based on time parameters:
-	 * - If fromMs or toMs provided → use getUserFillsByTime (time-filtered, up to 2000 fills)
+	 * - If fromMs or toMs provided → use getAllFillsInRange (time-filtered, up to 10k fills with parallel batching)
 	 * - Otherwise → use getUserFills (most recent 2000 fills)
 	 */
 	async getFills(params: GetFillsParams): Promise<Fill[]> {
 		const { user, fromMs, toMs } = params;
 
-		// If time range specified, use the time-filtered endpoint
+		// If time range specified, fetch with parallel batching for up to 10k fills
 		if (fromMs !== undefined || toMs !== undefined) {
-			// getUserFillsByTime requires startTime (required) and endTime (optional)
-			const startTime = fromMs || 0; // Default to epoch if not provided
-			return await defaultHyperliquidClient.getUserFillsByTime(
-				user,
-				startTime,
-				toMs,
-				false // aggregateByTime - keep fills separate for now
-			);
+			const startTime = fromMs || 0;
+			return await this.getAllFillsInRange(user, startTime, toMs);
 		}
 
 		// Otherwise get most recent fills
 		return await defaultHyperliquidClient.getUserFills(user, false);
+	}
+
+	/**
+	 * Fetch up to 10,000 fills in a time range using sequential batch requests.
+	 * Hyperliquid API returns max 2000 fills per request, but stores 10000 most recent.
+	 * 
+	 * Strategy: Fetch batches sequentially, starting after the last fill of the previous batch.
+	 * 
+	 * @param user - User address
+	 * @param startTime - Start timestamp in milliseconds
+	 * @param endTime - Optional end timestamp in milliseconds
+	 * @returns Array of fills, sorted by time (oldest first)
+	 */
+	private async getAllFillsInRange(user: string, startTime: number, endTime?: number): Promise<Fill[]> {
+		const MAX_FILLS = 10000;
+		const BATCH_SIZE = 2000; // Hyperliquid API limit per request
+		const MAX_BATCHES = 5; // 5 batches * 2000 = 10000 fills max
+
+		const allFills: Fill[] = [];
+		let currentStartTime = startTime;
+
+		// Fetch batches sequentially until we have enough or no more fills
+		for (let batchNum = 0; batchNum < MAX_BATCHES && allFills.length < MAX_FILLS; batchNum++) {
+			// Stop if we've passed endTime
+			if (endTime && currentStartTime > endTime) break;
+
+			const batch = await defaultHyperliquidClient.getUserFillsByTime(
+				user,
+				currentStartTime,
+				endTime,
+				false
+			);
+
+			// No more fills available
+			if (batch.length === 0) break;
+
+			allFills.push(...batch);
+
+			// If batch is not full, we've reached the end
+			if (batch.length < BATCH_SIZE) break;
+
+			// Move to next batch: start from 1ms after the last fill
+			const lastFill = batch[batch.length - 1];
+			if (!lastFill) break;
+
+			currentStartTime = lastFill.time + 1;
+
+			// Stop if we've passed endTime
+			if (endTime && currentStartTime > endTime) break;
+		}
+
+		// Trim to MAX_FILLS and ensure chronological order
+		return allFills
+			.sort((a, b) => a.time - b.time)
+			.slice(0, MAX_FILLS);
 	}
 
 	/**
