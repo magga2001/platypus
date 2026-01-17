@@ -1,13 +1,17 @@
 import { PublicHLDatasource } from '../datasource/hyperliquid';
 import type { LedgerDatasource } from '../datasource/hyperliquid';
+import { UserFillRepository } from '../repository/userFillRepository';
+import type { NewUserFill } from '../db/schema';
 
 const TARGET_BUILDER = process.env.TARGET_BUILDER?.toLowerCase();
 
 export class LedgerService {
   private datasource: LedgerDatasource;
+  private userFillRepo: UserFillRepository;
 
   constructor(datasource: LedgerDatasource = new PublicHLDatasource()) {
     this.datasource = datasource;
+    this.userFillRepo = new UserFillRepository();
   }
 
   /* =========================
@@ -70,12 +74,17 @@ export class LedgerService {
     const lifecycles = await this.getPositionLifecycles(params);
 
     // Get current open positions for risk data (bonus feature)
-    const currentPositions = await this.datasource.getCurrentPositions(params.user);
+    const currentPositions = await this.datasource.getCurrentPositions(
+      params.user,
+    );
     const positionRiskMap = new Map(
-      currentPositions.map(p => [p.coin, {
-        liquidationPx: p.liquidationPx,
-        marginUsed: p.marginUsed,
-      }])
+      currentPositions.map((p) => [
+        p.coin,
+        {
+          liquidationPx: p.liquidationPx,
+          marginUsed: p.marginUsed,
+        },
+      ]),
     );
 
     // Filter by builderOnly if specified, and exclude tainted lifecycles
@@ -86,12 +95,12 @@ export class LedgerService {
     // Flatten timeline and add risk data for current open positions
     return filteredLifecycles.flatMap((l) => {
       const riskData = positionRiskMap.get(l.coin);
-      
+
       return l.timeline.map((entry: any, index: number) => {
         // Only add risk data to the LAST entry if position is still open
         const isLastEntry = index === l.timeline.length - 1;
         const isOpenPosition = entry.netSize !== 0;
-        
+
         if (isLastEntry && isOpenPosition && riskData) {
           return {
             ...entry,
@@ -99,7 +108,7 @@ export class LedgerService {
             marginUsed: riskData.marginUsed,
           };
         }
-        
+
         return entry;
       });
     });
@@ -111,11 +120,11 @@ export class LedgerService {
 
   /**
    * Get PnL for a user with optional filters.
-   * 
+   *
    * Multi-coin aggregation (bonus feature):
    * - If coin specified: returns PnL for that specific coin
    * - If coin NOT specified: returns portfolio-level PnL across all coins
-   * 
+   *
    * This enables both single-coin and multi-coin leaderboards.
    */
   async getPnl(params: {
@@ -267,27 +276,23 @@ export class LedgerService {
 
   /**
    * Get deposit history for a user (optional bonus feature).
-   * 
+   *
    * API Spec: GET /v1/deposits?user=&fromMs=&toMs=
    * Returns: totalDeposits, depositCount, deposits[]
-   * 
+   *
    * Enables filtering users who reloaded capital during competition window.
    * Important for fair competition - users who deposit mid-competition
    * should be flagged or excluded from certain leaderboards.
-   * 
+   *
    * Returns: totalDeposits, depositCount, deposits[]
    * Note: Only positive transfers (deposits) are returned, withdrawals are filtered out.
    */
-  async getDeposits(params: {
-    user: string;
-    fromMs?: number;
-    toMs?: number;
-  }) {
+  async getDeposits(params: { user: string; fromMs?: number; toMs?: number }) {
     const allTransfers = await this.datasource.getDeposits(params);
-    
+
     // Filter to only deposits (positive amounts)
-    const deposits = allTransfers.filter(d => d.type === 'deposit');
-    
+    const deposits = allTransfers.filter((d) => d.type === 'deposit');
+
     // Calculate total
     const totalDeposits = deposits.reduce((sum, d) => {
       return sum + parseFloat(d.amount || '0');
@@ -296,7 +301,7 @@ export class LedgerService {
     return {
       totalDeposits: totalDeposits.toFixed(2),
       depositCount: deposits.length,
-      deposits: deposits.map(d => ({
+      deposits: deposits.map((d) => ({
         timeMs: d.time,
         amount: d.amount,
         coin: d.coin,
@@ -342,7 +347,71 @@ export class LedgerService {
     toMs?: number;
     builderOnly?: boolean;
   }) {
-    const fills = await this.datasource.getFills(params);
+    // Cache-first pattern: check database first, fall back to API
+    const normalizedUser = params.user.toLowerCase();
+    let fills: any[] = [];
+
+    // Try to load from database
+    const cachedFills = await this.userFillRepo.findByUser(normalizedUser, {
+      coin: params.coin,
+      fromMs: params.fromMs,
+      toMs: params.toMs,
+    });
+
+    if (cachedFills.length > 0) {
+      // Convert DB records back to fill format
+      fills = cachedFills.map((f) => ({
+        coin: f.coin,
+        time: f.time,
+        side: f.side,
+        px: f.px,
+        sz: f.sz,
+        fee: f.fee,
+        closedPnl: f.closedPnl,
+        builderFee: f.builderFee,
+        startPosition: f.startPosition,
+        dir: f.dir,
+        oid: f.oid,
+        tid: f.tid,
+        hash: f.hash,
+      }));
+    } else {
+      // Fetch from API if not in cache
+      fills = await this.datasource.getFills(params);
+
+      // Insert into database for future cache hits
+      if (fills.length > 0) {
+        const newFills: NewUserFill[] = fills.map((f) => ({
+          user: normalizedUser,
+          coin: f.coin,
+          oid: f.oid,
+          tid: f.tid,
+          px: parseFloat(f.px),
+          sz: parseFloat(f.sz),
+          side: f.side as 'A' | 'B',
+          time: f.time,
+          closedPnl: parseFloat(f.closedPnl || '0'),
+          fee: parseFloat(f.fee || '0'),
+          builderFee: f.builderFee ? parseFloat(f.builderFee) : null,
+          startPosition: parseFloat(f.startPosition || '0'),
+          dir: f.dir,
+          hash: f.hash,
+        }));
+
+        try {
+          // Batch insert in chunks of 100
+          const BATCH_SIZE = 100;
+          for (let i = 0; i < newFills.length; i += BATCH_SIZE) {
+            const batch = newFills.slice(i, i + BATCH_SIZE);
+            await this.userFillRepo.createMany(batch);
+          }
+        } catch (error) {
+          // Log but don't fail - database insert errors shouldn't break the API
+          console.warn('Failed to cache fills in database:', error);
+        }
+      }
+    }
+
     return this.transformFillsForPositions(fills);
   }
 
@@ -447,10 +516,10 @@ export class LedgerService {
           } else {
             // Position flip or partial close (bonus feature implemented)
             // Handles: long → short, short → long, partial closes
-            
+
             // Check if position flipped (sign changed)
-            const didFlip = (startPosition * netAfter < 0) && netAfter !== 0;
-            
+            const didFlip = startPosition * netAfter < 0 && netAfter !== 0;
+
             if (didFlip) {
               // Position flip (long → short or short → long)
               // Reset entry calculation to new direction
