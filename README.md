@@ -60,24 +60,87 @@ Interactive API documentation is available at:
 
 ---
 
+## Docker Deployment
+
+### Option 1: Local Development (Database + pgAdmin Only)
+
+Run PostgreSQL and pgAdmin locally, then run the app with `npm run dev`:
+
+```bash
+# Start local database and pgAdmin
+docker-compose -f docker-compose.local.yml up -d
+
+# Run the app locally
+npm run dev
+```
+
+**Services:**
+- PostgreSQL: `localhost:5432` (separate `postgres_data_local` volume)
+- pgAdmin: http://localhost:5050 (login: `admin@admin.com` / `admin`)
+- App: `localhost:3000` (via `npm run dev`)
+
+**To stop:**
+```bash
+docker-compose -f docker-compose.local.yml down
+```
+
+### Option 2: Full Production Stack (All in Docker)
+
+Run everything in Docker (database, migrations, app):
+
+```bash
+# Build and start full stack
+docker-compose up --build -d
+
+# View logs
+docker-compose logs -f app
+
+# Stop stack
+docker-compose down
+```
+
+**Services:**
+- PostgreSQL: Internal (separate `postgres_data` volume)
+- App: http://localhost:3000
+- Migrations: Runs automatically on startup
+
+**Note:** Both setups use **separate database volumes** so data won't conflict.
+
+---
+
 ## Environment Variables
 
 | Variable              | Required | Default                       | Description                                |
 | --------------------- | -------- | ----------------------------- | ------------------------------------------ |
 | `PORT`                | No       | `3000`                        | Server port                                |
+| `NODE_ENV`            | No       | `development`                 | Environment mode                           |
 | `HYPERLIQUID_API_URL` | No       | `https://api.hyperliquid.xyz` | Hyperliquid API base URL                   |
 | `TARGET_BUILDER`      | No       | –                             | Builder address **label only** (lowercase) |
+| `DB_HOST`             | No       | `localhost`                   | PostgreSQL host                            |
+| `DB_PORT`             | No       | `5432`                        | PostgreSQL port                            |
+| `DB_USER`             | No       | `postgres`                    | PostgreSQL username                        |
+| `DB_PASS`             | No       | `postgres`                    | PostgreSQL password                        |
+| `DB_NAME`             | No       | `platypus`                    | PostgreSQL database name                   |
 
 Example `.env`:
 
 ```env
 PORT=3000
+NODE_ENV=development
 HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
 TARGET_BUILDER=0x1234...abcd
+
+# Database (for local development with docker-compose.local.yml)
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASS=postgres
+DB_NAME=platypus
 ```
 
 **Important:**
-`TARGET_BUILDER` is used only as a **label** in responses. It is **not used for verification**.
+- `TARGET_BUILDER` is used only as a **label** in responses. It is **not used for verification**.
+- Database variables are used for local development. Docker Compose overrides `DB_HOST=postgres` internally.
 
 ---
 
