@@ -139,6 +139,9 @@ docker-compose logs -f app
 
 # Stop all services
 docker-compose down
+
+# Stop all services and delete all data (clean database)
+docker-compose down -v
 ```
 
 This will start:
