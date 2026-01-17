@@ -5,10 +5,17 @@
  * the LedgerDatasource interface. The service layer uses this interface,
  * making it easy to swap to different datasources (Insilico, HyperServe)
  * without changing service logic.
+ *
+ * WebSocket Support:
+ * - Real-time data streaming via subscribeToUserFills()
+ * - REST API fallback for historical data and reliability
+ * - In-memory cache for WebSocket-sourced fills
  */
 
 import { defaultHyperliquidClient } from '../lib/hyperliquidClient';
 import type { Fill } from '../lib/hyperliquidClient';
+import { defaultHyperliquidWebSocket, HyperliquidWebSocket } from '../lib/hyperliquidWebSocket';
+import type { WsUserFills } from '../lib/hyperliquidWebSocket';
 
 export interface GetFillsParams {
   user: string;
@@ -63,10 +70,18 @@ export interface LedgerDatasource {
 	getVolume(params: GetVolumeParams): Promise<number>;
 	getDeposits(params: GetDepositsParams): Promise<Deposit[]>;
 	getCurrentPositions(user: string): Promise<Position[]>;
+	// WebSocket methods
+	subscribeToUserFills?(user: string, onUpdate: (fills: Fill[]) => void): Promise<() => void>;
+	getCachedFills?(user: string): Fill[];
 }
 
 export class PublicHLDatasource implements LedgerDatasource {
-	constructor() { }
+	private wsClient: HyperliquidWebSocket;
+	private fillsCache: Map<string, Fill[]> = new Map();
+
+	constructor() {
+		this.wsClient = defaultHyperliquidWebSocket;
+	}
 
 	/**
 	 * Fetch fills from Hyperliquid API.
@@ -398,5 +413,90 @@ export class PublicHLDatasource implements LedgerDatasource {
 			console.warn(`Failed to get current positions for user ${user}:`, error);
 			return [];
 		}
+	}
+
+	/**
+	 * Subscribe to real-time user fills via WebSocket.
+	 * 
+	 * This method:
+	 * 1. Connects to WebSocket if not already connected
+	 * 2. Subscribes to user fills for the specified address
+	 * 3. Updates in-memory cache on each fill update
+	 * 4. Calls the onUpdate callback with new fills
+	 * 
+	 * The initial subscription provides a snapshot (marked with isSnapshot: true).
+	 * Subsequent updates are incremental fills as they occur.
+	 * 
+	 * @param user - User address to subscribe to
+	 * @param onUpdate - Callback function called with new fills
+	 * @returns Unsubscribe function to stop receiving updates
+	 */
+	async subscribeToUserFills(user: string, onUpdate: (fills: Fill[]) => void): Promise<() => void> {
+		// Ensure WebSocket is connected
+		if (!this.wsClient.isConnected()) {
+			console.log('Connecting to Hyperliquid WebSocket...');
+			await this.wsClient.connect();
+		}
+
+		// Subscribe to user fills
+		const unsubscribe = this.wsClient.subscribeUserFills(user, (data: WsUserFills) => {
+			const { fills, isSnapshot } = data;
+
+			if (isSnapshot) {
+				// Initial snapshot - replace cache
+				console.log(`Received snapshot for ${user}: ${fills.length} fills`);
+				this.fillsCache.set(user, fills);
+			} else {
+				// Incremental update - append to cache
+				const existing = this.fillsCache.get(user) || [];
+				const updated = [...existing, ...fills];
+
+				// Keep cache size reasonable (last 10k fills)
+				if (updated.length > 10000) {
+					updated.splice(0, updated.length - 10000);
+				}
+
+				this.fillsCache.set(user, updated);
+				console.log(`Received ${fills.length} new fills for ${user}`);
+			}
+
+			// Notify callback
+			onUpdate(fills);
+		});
+
+		return unsubscribe;
+	}
+
+	/**
+	 * Get cached fills for a user from WebSocket updates.
+	 * Returns empty array if no WebSocket data is available.
+	 * 
+	 * This is useful for:
+	 * - Checking if WebSocket has data before falling back to REST
+	 * - Getting real-time fills without making API calls
+	 * - Combining cached data with historical REST queries
+	 * 
+	 * @param user - User address
+	 * @returns Array of cached fills, or empty array if none
+	 */
+	getCachedFills(user: string): Fill[] {
+		return this.fillsCache.get(user) || [];
+	}
+
+	/**
+	 * Check if WebSocket is connected and active.
+	 * Useful for determining whether to use cached data or REST fallback.
+	 */
+	isWebSocketConnected(): boolean {
+		return this.wsClient.isConnected();
+	}
+
+	/**
+	 * Disconnect WebSocket and clear all subscriptions.
+	 * Should be called on application shutdown.
+	 */
+	disconnectWebSocket(): void {
+		this.wsClient.disconnect();
+		this.fillsCache.clear();
 	}
 }
