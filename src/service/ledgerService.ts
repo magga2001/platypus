@@ -69,18 +69,55 @@ export class LedgerService {
     // Get lifecycles (reusable internal method)
     const lifecycles = await this.getPositionLifecycles(params);
 
+    // Get current open positions for risk data (bonus feature)
+    const currentPositions = await this.datasource.getCurrentPositions(params.user);
+    const positionRiskMap = new Map(
+      currentPositions.map(p => [p.coin, {
+        liquidationPx: p.liquidationPx,
+        marginUsed: p.marginUsed,
+      }])
+    );
+
     // Filter by builderOnly if specified, and exclude tainted lifecycles
-    const filtered = params.builderOnly
+    const filteredLifecycles = params.builderOnly
       ? lifecycles.filter((l) => l.builderOnly && !l.tainted)
       : lifecycles;
 
-    return filtered.flatMap((l) => l.timeline);
+    // Flatten timeline and add risk data for current open positions
+    return filteredLifecycles.flatMap((l) => {
+      const riskData = positionRiskMap.get(l.coin);
+      
+      return l.timeline.map((entry: any, index: number) => {
+        // Only add risk data to the LAST entry if position is still open
+        const isLastEntry = index === l.timeline.length - 1;
+        const isOpenPosition = entry.netSize !== 0;
+        
+        if (isLastEntry && isOpenPosition && riskData) {
+          return {
+            ...entry,
+            liquidationPx: riskData.liquidationPx,
+            marginUsed: riskData.marginUsed,
+          };
+        }
+        
+        return entry;
+      });
+    });
   }
 
   /* =========================
      PnL
      ========================= */
 
+  /**
+   * Get PnL for a user with optional filters.
+   * 
+   * Multi-coin aggregation (bonus feature):
+   * - If coin specified: returns PnL for that specific coin
+   * - If coin NOT specified: returns portfolio-level PnL across all coins
+   * 
+   * This enables both single-coin and multi-coin leaderboards.
+   */
   async getPnl(params: {
     user: string;
     coin?: string;
@@ -225,6 +262,49 @@ export class LedgerService {
   }
 
   /* =========================
+     Deposits (Bonus Feature)
+     ========================= */
+
+  /**
+   * Get deposit history for a user (optional bonus feature).
+   * 
+   * API Spec: GET /v1/deposits?user=&fromMs=&toMs=
+   * Returns: totalDeposits, depositCount, deposits[]
+   * 
+   * Enables filtering users who reloaded capital during competition window.
+   * Important for fair competition - users who deposit mid-competition
+   * should be flagged or excluded from certain leaderboards.
+   * 
+   * Returns: totalDeposits, depositCount, deposits[]
+   * Note: Only positive transfers (deposits) are returned, withdrawals are filtered out.
+   */
+  async getDeposits(params: {
+    user: string;
+    fromMs?: number;
+    toMs?: number;
+  }) {
+    const allTransfers = await this.datasource.getDeposits(params);
+    
+    // Filter to only deposits (positive amounts)
+    const deposits = allTransfers.filter(d => d.type === 'deposit');
+    
+    // Calculate total
+    const totalDeposits = deposits.reduce((sum, d) => {
+      return sum + parseFloat(d.amount || '0');
+    }, 0);
+
+    return {
+      totalDeposits: totalDeposits.toFixed(2),
+      depositCount: deposits.length,
+      deposits: deposits.map(d => ({
+        timeMs: d.time,
+        amount: d.amount,
+        coin: d.coin,
+      })),
+    };
+  }
+
+  /* =========================
      Internal helpers
      ========================= */
 
@@ -365,11 +445,20 @@ export class LedgerService {
             state.entrySize += Math.abs(fillDelta);
             avgEntryPx = state.entryValue / state.entrySize;
           } else {
-            // Flipping position (long to short or vice versa) or partial close
-            // When flipping, reset entry calculation to new direction
-            // For partial close, keep previous entry price
-            if (Math.abs(netAfter) < Math.abs(startPosition)) {
-              // Partial close - keep entry price
+            // Position flip or partial close (bonus feature implemented)
+            // Handles: long → short, short → long, partial closes
+            
+            // Check if position flipped (sign changed)
+            const didFlip = (startPosition * netAfter < 0) && netAfter !== 0;
+            
+            if (didFlip) {
+              // Position flip (long → short or short → long)
+              // Reset entry calculation to new direction
+              avgEntryPx = fillPrice;
+              state.entryValue = fillPrice * Math.abs(netAfter);
+              state.entrySize = Math.abs(netAfter);
+            } else if (Math.abs(netAfter) < Math.abs(startPosition)) {
+              // Partial close (reducing position) - keep entry price
               if (state.entrySize !== 0) {
                 avgEntryPx = state.entryValue / state.entrySize;
               } else {
@@ -379,7 +468,7 @@ export class LedgerService {
               state.entrySize = Math.abs(netAfter);
               state.entryValue = avgEntryPx * Math.abs(netAfter);
             } else {
-              // Flipping - reset entry calculation
+              // Shouldn't happen, but fallback
               avgEntryPx = fillPrice;
               state.entryValue = fillPrice * Math.abs(netAfter);
               state.entrySize = Math.abs(netAfter);
