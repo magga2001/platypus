@@ -38,22 +38,16 @@ export class PublicHLDatasource implements LedgerDatasource {
 	/**
 	 * Fetch fills from Hyperliquid API.
 	 * Chooses the appropriate endpoint based on time parameters:
-	 * - If fromMs or toMs provided → use getUserFillsByTime (time-filtered, up to 2000 fills)
+	 * - If fromMs or toMs provided → use getAllFillsInRange (time-filtered, up to 10k fills with parallel batching)
 	 * - Otherwise → use getUserFills (most recent 2000 fills)
 	 */
 	async getFills(params: GetFillsParams): Promise<Fill[]> {
 		const { user, fromMs, toMs } = params;
 
-		// If time range specified, use the time-filtered endpoint
+		// If time range specified, fetch with parallel batching for up to 10k fills
 		if (fromMs !== undefined || toMs !== undefined) {
-			// getUserFillsByTime requires startTime (required) and endTime (optional)
-			const startTime = fromMs || 0; // Default to epoch if not provided
-			return await defaultHyperliquidClient.getUserFillsByTime(
-				user,
-				startTime,
-				toMs,
-				false // aggregateByTime - keep fills separate for now
-			);
+			const startTime = fromMs || 0;
+			return await this.getAllFillsInRange(user, startTime, toMs);
 		}
 
 		// Otherwise get most recent fills
@@ -61,25 +55,130 @@ export class PublicHLDatasource implements LedgerDatasource {
 	}
 
 	/**
+	 * Fetch up to 10,000 fills in a time range using sequential batch requests.
+	 * Hyperliquid API returns max 2000 fills per request, but stores 10000 most recent.
+	 * 
+	 * Strategy: Fetch batches sequentially, starting after the last fill of the previous batch.
+	 * 
+	 * @param user - User address
+	 * @param startTime - Start timestamp in milliseconds
+	 * @param endTime - Optional end timestamp in milliseconds
+	 * @returns Array of fills, sorted by time (oldest first)
+	 */
+	private async getAllFillsInRange(user: string, startTime: number, endTime?: number): Promise<Fill[]> {
+		const MAX_FILLS = 10000;
+		const BATCH_SIZE = 2000; // Hyperliquid API limit per request
+		const MAX_BATCHES = 5; // 5 batches * 2000 = 10000 fills max
+
+		const allFills: Fill[] = [];
+		let currentStartTime = startTime;
+
+		// Fetch batches sequentially until we have enough or no more fills
+		for (let batchNum = 0; batchNum < MAX_BATCHES && allFills.length < MAX_FILLS; batchNum++) {
+			// Stop if we've passed endTime
+			if (endTime && currentStartTime > endTime) break;
+
+			const batch = await defaultHyperliquidClient.getUserFillsByTime(
+				user,
+				currentStartTime,
+				endTime,
+				false
+			);
+
+			// No more fills available
+			if (batch.length === 0) break;
+
+			allFills.push(...batch);
+
+			// If batch is not full, we've reached the end
+			if (batch.length < BATCH_SIZE) break;
+
+			// Move to next batch: start from 1ms after the last fill
+			const lastFill = batch[batch.length - 1];
+			if (!lastFill) break;
+
+			currentStartTime = lastFill.time + 1;
+
+			// Stop if we've passed endTime
+			if (endTime && currentStartTime > endTime) break;
+		}
+
+		// Trim to MAX_FILLS and ensure chronological order
+		return allFills
+			.sort((a, b) => a.time - b.time)
+			.slice(0, MAX_FILLS);
+	}
+
+	/**
 	 * Get user's equity at a specific time.
 	 * 
-	 * LIMITATION: The Hyperliquid public API does not provide a direct endpoint
-	 * to retrieve a user's account equity/value at a historical timestamp.
+	 * Uses the Hyperliquid portfolio endpoint to retrieve account value history.
+	 * If atMs is provided, finds the closest equity value at or before that timestamp.
+	 * If atMs is not provided, returns the most recent equity value.
 	 * 
-	 * This method is used by the PnL service to calculate return percentage
-	 * when `maxStartCapital` is provided. Without equity data, return percentage
-	 * calculations will default to 0.
-	 * 
-	 * Possible workarounds (not implemented):
-	 * - Calculate equity from position history (complex, requires market prices)
-	 * - Use a separate data source that maintains account snapshots
-	 * - Accept equity as a parameter in the PnL request
-	 * 
-	 * @returns 0 (placeholder - indicates equity data unavailable)
+	 * @param user - User address
+	 * @param atMs - Optional timestamp in milliseconds
+	 * @returns User's equity at the specified time, or 0 if unavailable
 	 */
-	async getEquityAt(_user: string, _atMs?: number): Promise<number> {
-		// TODO: Implement via alternative data source or accept as request parameter
-		return 0;
+	async getEquityAt(user: string, atMs?: number): Promise<number> {
+		try {
+			// Get portfolio history from Hyperliquid API
+			const portfolio = await defaultHyperliquidClient.getPortfolio(user);
+
+			if (!portfolio || !Array.isArray(portfolio)) {
+				return 0;
+			}
+
+			// Extract accountValueHistory from the appropriate timeframe
+			// Try "day" first for most recent data, fallback to other timeframes
+			let accountValueHistory: [number, string][] = [];
+
+			for (const item of portfolio) {
+				if (Array.isArray(item) && item.length === 2) {
+					const [timeframe, data] = item;
+					if (data && Array.isArray(data.accountValueHistory) && data.accountValueHistory.length > 0) {
+						accountValueHistory = data.accountValueHistory;
+						// Prefer "day" or "allTime" timeframes for more granular data
+						if (timeframe === 'day' || timeframe === 'allTime') {
+							break;
+						}
+					}
+				}
+			}
+
+			if (accountValueHistory.length === 0) {
+				return 0;
+			}
+
+			// If no specific timestamp requested, return most recent equity
+			if (!atMs) {
+				const latest = accountValueHistory[accountValueHistory.length - 1];
+				return latest ? parseFloat(latest[1]) : 0;
+			}
+
+			// Find equity closest to but not after atMs
+			let closestEntry: [number, string] | null = null;
+
+			for (const entry of accountValueHistory) {
+				const [timestamp, value] = entry;
+				if (timestamp <= atMs) {
+					if (!closestEntry || timestamp > closestEntry[0]) {
+						closestEntry = entry as [number, string];
+					}
+				}
+			}
+
+			// If no entry found before atMs, use the earliest available
+			if (!closestEntry && accountValueHistory.length > 0) {
+				closestEntry = accountValueHistory[0] as [number, string];
+			}
+
+			return closestEntry ? parseFloat(closestEntry[1]) : 0;
+
+		} catch (error) {
+			console.warn(`Failed to get equity for user ${user}:`, error);
+			return 0;
+		}
 	}
 
 	/**
