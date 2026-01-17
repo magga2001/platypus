@@ -169,8 +169,7 @@ export class LedgerService {
       feesPaid,
       tradeCount, // Unique trades (by oid - Order ID)
       fillCount, // Total fills
-      tainted: params.builderOnly ? lifecycles.some((l) => l.tainted) : false,
-      // Metadata: show which capital source was used
+      tainted: lifecycles.some((l) => l.tainted), // Always check, regardless of builderOnly
       effectiveCapital,
       capitalSource:
         params.maxStartCapital !== undefined
@@ -679,14 +678,9 @@ export class LedgerService {
           timeMs: fill.timeMs,
           netSize: fill.netAfter,
           avgEntryPx: fill.avgEntryPx,
+          tainted: current.tainted || false, // Default tainted status
         };
 
-        // Include tainted flag when builderOnly mode is enabled
-        if (builderOnly) {
-          // For open lifecycles, tainted status will be determined at close
-          // For closed lifecycles, use the final tainted status
-          timelineEntry.tainted = current.tainted || false;
-        }
 
         current.timeline.push(timelineEntry);
 
@@ -712,7 +706,7 @@ export class LedgerService {
           current.builderOnly = current.hasBuilder && !current.tainted;
 
           // Update all timeline entries with final tainted status when builderOnly mode
-          if (builderOnly && current.timeline.length > 0) {
+          if (current.timeline.length > 0) {
             current.timeline.forEach((entry: any) => {
               entry.tainted = current.tainted;
             });
@@ -734,7 +728,7 @@ export class LedgerService {
       current.builderOnly = current.hasBuilder && !current.tainted;
 
       // Update all timeline entries with final tainted status when builderOnly mode
-      if (builderOnly && current.timeline.length > 0) {
+      if (current.timeline.length > 0) {
         current.timeline.forEach((entry: any) => {
           entry.tainted = current.tainted;
         });
