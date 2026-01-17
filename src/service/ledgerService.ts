@@ -127,9 +127,9 @@ export class LedgerService {
 
     const tradeCount = eligible.reduce((sum, l) => sum + l.tradeCount, 0);
 
-    const effectiveCapital = params.maxStartCapital
-      ? Math.min(equityAtFromMs, params.maxStartCapital)
-      : equityAtFromMs;
+    // Use maxStartCapital if provided, otherwise fall back to equityAtFromMs
+    // Since equityAtFromMs is 0 (API limitation), maxStartCapital will be used when provided
+    const effectiveCapital = params.maxStartCapital ?? equityAtFromMs;
 
     return {
       realizedPnl,

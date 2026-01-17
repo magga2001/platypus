@@ -156,6 +156,21 @@ export class HyperliquidClient {
 		return (payload && Array.isArray(payload.fills)) ? payload.fills : [];
 	}
 
+	/**
+	 * Retrieve a user's portfolio history (POST /info with type="portfolio")
+	 * Returns account value history, PnL history, and volume for different timeframes.
+	 * Timeframes: day, week, month, allTime, perpDay, perpWeek, perpMonth, perpAllTime
+	 */
+	async getPortfolio(user: string): Promise<any> {
+		const body = {
+			type: 'portfolio',
+			user,
+		};
+
+		const payload = await this.postJson<any>('/info', body);
+		return payload;
+	}
+
 }
 
 export const defaultHyperliquidClient = new HyperliquidClient({

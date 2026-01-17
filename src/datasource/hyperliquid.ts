@@ -63,23 +63,73 @@ export class PublicHLDatasource implements LedgerDatasource {
 	/**
 	 * Get user's equity at a specific time.
 	 * 
-	 * LIMITATION: The Hyperliquid public API does not provide a direct endpoint
-	 * to retrieve a user's account equity/value at a historical timestamp.
+	 * Uses the Hyperliquid portfolio endpoint to retrieve account value history.
+	 * If atMs is provided, finds the closest equity value at or before that timestamp.
+	 * If atMs is not provided, returns the most recent equity value.
 	 * 
-	 * This method is used by the PnL service to calculate return percentage
-	 * when `maxStartCapital` is provided. Without equity data, return percentage
-	 * calculations will default to 0.
-	 * 
-	 * Possible workarounds (not implemented):
-	 * - Calculate equity from position history (complex, requires market prices)
-	 * - Use a separate data source that maintains account snapshots
-	 * - Accept equity as a parameter in the PnL request
-	 * 
-	 * @returns 0 (placeholder - indicates equity data unavailable)
+	 * @param user - User address
+	 * @param atMs - Optional timestamp in milliseconds
+	 * @returns User's equity at the specified time, or 0 if unavailable
 	 */
-	async getEquityAt(_user: string, _atMs?: number): Promise<number> {
-		// TODO: Implement via alternative data source or accept as request parameter
-		return 0;
+	async getEquityAt(user: string, atMs?: number): Promise<number> {
+		try {
+			// Get portfolio history from Hyperliquid API
+			const portfolio = await defaultHyperliquidClient.getPortfolio(user);
+
+			if (!portfolio || !Array.isArray(portfolio)) {
+				return 0;
+			}
+
+			// Extract accountValueHistory from the appropriate timeframe
+			// Try "day" first for most recent data, fallback to other timeframes
+			let accountValueHistory: [number, string][] = [];
+
+			for (const item of portfolio) {
+				if (Array.isArray(item) && item.length === 2) {
+					const [timeframe, data] = item;
+					if (data && Array.isArray(data.accountValueHistory) && data.accountValueHistory.length > 0) {
+						accountValueHistory = data.accountValueHistory;
+						// Prefer "day" or "allTime" timeframes for more granular data
+						if (timeframe === 'day' || timeframe === 'allTime') {
+							break;
+						}
+					}
+				}
+			}
+
+			if (accountValueHistory.length === 0) {
+				return 0;
+			}
+
+			// If no specific timestamp requested, return most recent equity
+			if (!atMs) {
+				const latest = accountValueHistory[accountValueHistory.length - 1];
+				return latest ? parseFloat(latest[1]) : 0;
+			}
+
+			// Find equity closest to but not after atMs
+			let closestEntry: [number, string] | null = null;
+
+			for (const entry of accountValueHistory) {
+				const [timestamp, value] = entry;
+				if (timestamp <= atMs) {
+					if (!closestEntry || timestamp > closestEntry[0]) {
+						closestEntry = entry as [number, string];
+					}
+				}
+			}
+
+			// If no entry found before atMs, use the earliest available
+			if (!closestEntry && accountValueHistory.length > 0) {
+				closestEntry = accountValueHistory[0] as [number, string];
+			}
+
+			return closestEntry ? parseFloat(closestEntry[1]) : 0;
+
+		} catch (error) {
+			console.warn(`Failed to get equity for user ${user}:`, error);
+			return 0;
+		}
 	}
 
 	/**
