@@ -25,11 +25,43 @@ export interface GetVolumeParams {
 	toMs?: number;
 }
 
+export interface Deposit {
+	time: number;           // Timestamp in milliseconds
+	amount: string;         // Deposit amount
+	coin: string;           // Coin deposited (e.g., "USDC")
+	txHash?: string;        // Transaction hash
+	type: 'deposit' | 'withdrawal' | 'transfer';
+}
+
+export interface GetDepositsParams {
+	user: string;
+	fromMs?: number;
+	toMs?: number;
+}
+
+export interface Position {
+	coin: string;
+	szi: string;            // Position size
+	leverage: {
+		type: string;
+		value: number;
+	};
+	liquidationPx?: string; // Liquidation price
+	marginUsed: string;     // Margin used for this position
+	maxLeverage: number;
+	positionValue: string;
+	returnOnEquity: string;
+	unrealizedPnl: string;
+	entryPx?: string;      // Entry price
+}
+
 export interface LedgerDatasource {
 	getFills(params: GetFillsParams): Promise<Fill[]>;
 	getEquityAt(user: string, atMs?: number): Promise<number>;
 	getAllUsers(): Promise<string[]>;
 	getVolume(params: GetVolumeParams): Promise<number>;
+	getDeposits(params: GetDepositsParams): Promise<Deposit[]>;
+	getCurrentPositions(user: string): Promise<Position[]>;
 }
 
 export class PublicHLDatasource implements LedgerDatasource {
@@ -242,5 +274,108 @@ export class PublicHLDatasource implements LedgerDatasource {
 		}, 0);
 
 		return volume;
+	}
+
+	/**
+	 * Get deposits/withdrawals for a user.
+	 * 
+	 * Uses the userNonFundingLedgerUpdates endpoint which provides actual
+	 * deposit/withdrawal transactions (not inferred from portfolio changes).
+	 * 
+	 * This endpoint returns ledger updates including:
+	 * - Deposits: type="deposit" with usdc field
+	 * - Withdrawals: type="withdraw" with usdc field
+	 * - Internal transfers: type="accountClassTransfer", type="spotTransfer", etc.
+	 */
+	async getDeposits(params: GetDepositsParams): Promise<Deposit[]> {
+		try {
+			const { user, fromMs, toMs } = params;
+			
+			// Get all non-funding ledger updates
+			const ledger = await defaultHyperliquidClient.getUserNonFundingLedgerUpdates(
+				user,
+				fromMs,
+				toMs
+			);
+
+			if (!Array.isArray(ledger) || ledger.length === 0) {
+				return [];
+			}
+
+			// Extract deposits and withdrawals
+			const deposits: Deposit[] = [];
+			
+			for (const entry of ledger) {
+				if (!entry || !entry.delta || !entry.delta.type) continue;
+
+				const { time, delta, hash } = entry;
+				
+				// Handle deposits
+				if (delta.type === 'deposit' && delta.usdc) {
+					deposits.push({
+						time,
+						amount: delta.usdc,
+						coin: 'USDC',
+						txHash: hash !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? hash : undefined,
+						type: 'deposit',
+					});
+				}
+				
+				// Handle withdrawals
+				else if (delta.type === 'withdraw' && delta.usdc) {
+					deposits.push({
+						time,
+						amount: delta.usdc,
+						coin: 'USDC',
+						txHash: hash !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? hash : undefined,
+						type: 'withdrawal',
+					});
+				}
+			}
+
+			// Return deposits and withdrawals sorted by time (newest first)
+			return deposits.sort((a, b) => b.time - a.time);
+
+		} catch (error) {
+			console.warn(`Failed to get deposits for user ${params.user}:`, error);
+			return [];
+		}
+	}
+
+	/**
+	 * Get current open positions for a user with risk data.
+	 * 
+	 * Fetches clearinghouse state which includes:
+	 * - Position size and direction
+	 * - Liquidation price
+	 * - Margin used
+	 * - Leverage
+	 * - Unrealized PnL
+	 */
+	async getCurrentPositions(user: string): Promise<Position[]> {
+		try {
+			const state = await defaultHyperliquidClient.getClearinghouseState(user);
+			
+			if (!state || !state.assetPositions) {
+				return [];
+			}
+
+			return state.assetPositions.map((pos: any) => ({
+				coin: pos.position.coin,
+				szi: pos.position.szi,
+				leverage: pos.position.leverage,
+				liquidationPx: pos.position.liquidationPx,
+				marginUsed: pos.position.marginUsed,
+				maxLeverage: pos.position.maxLeverage,
+				positionValue: pos.position.positionValue,
+				returnOnEquity: pos.position.returnOnEquity,
+				unrealizedPnl: pos.position.unrealizedPnl,
+				entryPx: pos.position.entryPx,
+			}));
+
+		} catch (error) {
+			console.warn(`Failed to get current positions for user ${user}:`, error);
+			return [];
+		}
 	}
 }

@@ -3,6 +3,7 @@ import tradeRoute from './tradeRoute';
 import positionRoute from './positionRoute';
 import pnlRoute from './pnlRoute';
 import leaderboardRoute from './leaderboardRoute';
+import depositRoute from './depositRoute';
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ const defaultRoutes = [
     path: '/trades',
     route: tradeRoute,
   },
-    {
+  {
     path: '/positions',
     route: positionRoute,
   },
@@ -22,6 +23,10 @@ const defaultRoutes = [
   {
     path: '/leaderboard',
     route: leaderboardRoute,
+  },
+  {
+    path: '/deposits',
+    route: depositRoute,
   },
 ];
 
