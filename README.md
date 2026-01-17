@@ -193,11 +193,31 @@ DB_NAME=platypus
 
 ## API Overview
 
-All endpoints are prefixed with:
+All endpoints are prefixed with `/v1` and return JSON responses.
 
-```
-/v1
-```
+**Interactive API Documentation**: http://localhost:3000/docs (Swagger UI)
+
+### Available Endpoints
+
+| Endpoint                     | Method | Description                                     |
+| ---------------------------- | ------ | ----------------------------------------------- |
+| `/v1/trades`                 | GET    | Get normalized trade fills with builder labels  |
+| `/v1/positions/history`      | GET    | Get position lifecycle timeline                 |
+| `/v1/pnl`                    | GET    | Get realized PnL and performance metrics        |
+| `/v1/leaderboard`            | GET    | Get ranked users by volume/PnL/return           |
+| `/v1/deposits`               | GET    | Get USDC deposit history                        |
+
+### Common Parameters
+
+Most endpoints support these parameters:
+
+| Parameter     | Type    | Description                                 |
+| ------------- | ------- | ------------------------------------------- |
+| `user`        | string  | Wallet address (required for most endpoints)|
+| `coin`        | string  | Filter by coin (e.g., `BTC`, `ETH`, `@107`) |
+| `fromMs`      | number  | Start timestamp in milliseconds             |
+| `toMs`        | number  | End timestamp in milliseconds               |
+| `builderOnly` | boolean | Only include builder-attributed activity    |
 
 ---
 
@@ -218,6 +238,31 @@ Returns normalized trade fills for a wallet.
 ### Response Fields
 
 `timeMs`, `coin`, `side`, `px`, `sz`, `fee`, `closedPnl`, `builder`, `oid`, `tid`
+
+### Example Request
+
+```bash
+curl "http://localhost:3000/v1/trades?user=0x6c8031a9eb4415284f3f89c0420f697c87168263&coin=BTC&builderOnly=true"
+```
+
+### Example Response
+
+```json
+[
+  {
+    "timeMs": 1768665950720,
+    "coin": "BTC",
+    "side": "B",
+    "px": "97000.0",
+    "sz": "0.1",
+    "fee": "3.74",
+    "closedPnl": "7.39",
+    "builder": "your-builder-name",
+    "oid": "123456",
+    "tid": "789012"
+  }
+]
+```
 
 ---
 
@@ -241,6 +286,31 @@ Returns reconstructed **position lifecycle states**.
 
 The `tainted` field appears only when `builderOnly=true`.
 
+### Example Request
+
+```bash
+curl "http://localhost:3000/v1/positions/history?user=0x6c8031a9eb4415284f3f89c0420f697c87168263&coin=BTC"
+```
+
+### Example Response
+
+```json
+[
+  {
+    "timeMs": 1768665950720,
+    "netSize": "0.1",
+    "avgEntryPx": "97000.0",
+    "liquidationPx": "85000.0",
+    "marginUsed": "1000.0"
+  },
+  {
+    "timeMs": 1768665960720,
+    "netSize": "0.15",
+    "avgEntryPx": "97250.0"
+  }
+]
+```
+
 ---
 
 ## GET /v1/pnl
@@ -260,21 +330,42 @@ Computes realized performance metrics over a time range.
 
 ### Response Fields
 
-- `realizedPnl`
-- `returnPct`
-- `feesPaid`
-- `tradeCount`
-- `fillCount`
-- `tainted`
-- `effectiveCapital`
-- `capitalSource`
-- `equityAtFromMs`
+- `realizedPnl` - Gross PnL from trading
+- `returnPct` - Return percentage based on starting capital
+- `feesPaid` - Total trading fees
+- `tradeCount` - Number of trades
+- `fillCount` - Number of fills
+- `tainted` - Whether lifecycle includes mixed builder/non-builder activity
+- `effectiveCapital` - Capital used for return calculation
+- `capitalSource` - Source of capital calculation
+- `equityAtFromMs` - Account equity at start time
+
+### Example Request
+
+```bash
+curl "http://localhost:3000/v1/pnl?user=0x6c8031a9eb4415284f3f89c0420f697c87168263&coin=BTC"
+```
+
+### Example Response
+
+```json
+{
+  "realizedPnl": 196.87,
+  "returnPct": 1.97,
+  "feesPaid": 2999.82,
+  "tradeCount": 2000,
+  "fillCount": 2000,
+  "effectiveCapital": 10000,
+  "capitalSource": "equity",
+  "equityAtFromMs": 10000
+}
+```
 
 ---
 
 ## GET /v1/leaderboard
 
-Ranks users by performance metrics.
+Ranks users by performance metrics. **Note:** Only includes users who have made API calls and have cached data.
 
 ### Parameters
 
@@ -290,6 +381,35 @@ Ranks users by performance metrics.
 ### Response Fields
 
 `rank`, `user`, `metricValue`, `tradeCount`, `fillCount`, `tainted`
+
+### Example Request
+
+```bash
+curl "http://localhost:3000/v1/leaderboard?metric=pnl&coin=BTC&builderOnly=true"
+```
+
+### Example Response
+
+```json
+[
+  {
+    "rank": 1,
+    "user": "0x6c8031a9eb4415284f3f89c0420f697c87168263",
+    "metricValue": 1234.56,
+    "tradeCount": 150,
+    "fillCount": 200,
+    "tainted": false
+  },
+  {
+    "rank": 2,
+    "user": "0x0e09b56ef137f417e424f1265425e93bfff77e17",
+    "metricValue": 987.65,
+    "tradeCount": 120,
+    "fillCount": 180,
+    "tainted": false
+  }
+]
+```
 
 ---
 
@@ -308,6 +428,33 @@ Returns deposit history for a wallet.
 ### Response Fields
 
 `totalDeposits`, `depositCount`, `deposits[]` (`timeMs`, `amount`, `coin`)
+
+### Example Request
+
+```bash
+curl "http://localhost:3000/v1/deposits?user=0x6c8031a9eb4415284f3f89c0420f697c87168263"
+```
+
+### Example Response
+
+```json
+{
+  "totalDeposits": "16579.90",
+  "depositCount": 225,
+  "deposits": [
+    {
+      "timeMs": 1767109566769,
+      "amount": "1000.0",
+      "coin": "USDC"
+    },
+    {
+      "timeMs": 1767109566770,
+      "amount": "500.0",
+      "coin": "USDC"
+    }
+  ]
+}
+```
 
 ---
 
