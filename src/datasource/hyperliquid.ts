@@ -1,6 +1,6 @@
 /**
  * Datasource adapter for Hyperliquid public API.
- * 
+ *
  * This layer wraps the low-level hyperliquidClient and implements
  * the LedgerDatasource interface. The service layer uses this interface,
  * making it easy to swap to different datasources (Insilico, HyperServe)
@@ -11,18 +11,19 @@ import { defaultHyperliquidClient } from '../lib/hyperliquidClient';
 import type { Fill } from '../lib/hyperliquidClient';
 
 export interface GetFillsParams {
-	user: string;
-	coin?: string;
-	fromMs?: number;
-	toMs?: number;
-	builderOnly?: boolean;
+  user: string;
+  coin?: string;
+  fromMs?: number;
+  toMs?: number;
+  builderOnly?: boolean;
 }
 
 export interface GetVolumeParams {
-	user: string;
-	coin?: string;
-	fromMs?: number;
-	toMs?: number;
+  user: string;
+  coin?: string;
+  fromMs?: number;
+  toMs?: number;
+  builderOnly?: boolean;
 }
 
 export interface Deposit {
@@ -151,130 +152,150 @@ export class PublicHLDatasource implements LedgerDatasource {
 			.slice(0, MAX_FILLS);
 	}
 
-	/**
-	 * Get user's equity at a specific time.
-	 * 
-	 * Uses the Hyperliquid portfolio endpoint to retrieve account value history.
-	 * If atMs is provided, finds the closest equity value at or before that timestamp.
-	 * If atMs is not provided, returns the most recent equity value.
-	 * 
-	 * @param user - User address
-	 * @param atMs - Optional timestamp in milliseconds
-	 * @returns User's equity at the specified time, or 0 if unavailable
-	 */
-	async getEquityAt(user: string, atMs?: number): Promise<number> {
-		try {
-			// Get portfolio history from Hyperliquid API
-			const portfolio = await defaultHyperliquidClient.getPortfolio(user);
+  /**
+   * Get user's equity at a specific time.
+   *
+   * Uses the Hyperliquid portfolio endpoint to retrieve account value history.
+   * If atMs is provided, finds the closest equity value at or before that timestamp.
+   * If atMs is not provided, returns the most recent equity value.
+   *
+   * @param user - User address
+   * @param atMs - Optional timestamp in milliseconds
+   * @returns User's equity at the specified time, or 0 if unavailable
+   */
+  async getEquityAt(user: string, atMs?: number): Promise<number> {
+    try {
+      // Get portfolio history from Hyperliquid API
+      const portfolio = await defaultHyperliquidClient.getPortfolio(user);
 
-			if (!portfolio || !Array.isArray(portfolio)) {
-				return 0;
-			}
+      if (!portfolio || !Array.isArray(portfolio)) {
+        return 0;
+      }
 
-			// Extract accountValueHistory from the appropriate timeframe
-			// Try "day" first for most recent data, fallback to other timeframes
-			let accountValueHistory: [number, string][] = [];
+      // Extract accountValueHistory from the appropriate timeframe
+      // Try "day" first for most recent data, fallback to other timeframes
+      let accountValueHistory: [number, string][] = [];
 
-			for (const item of portfolio) {
-				if (Array.isArray(item) && item.length === 2) {
-					const [timeframe, data] = item;
-					if (data && Array.isArray(data.accountValueHistory) && data.accountValueHistory.length > 0) {
-						accountValueHistory = data.accountValueHistory;
-						// Prefer "day" or "allTime" timeframes for more granular data
-						if (timeframe === 'day' || timeframe === 'allTime') {
-							break;
-						}
-					}
-				}
-			}
+      for (const item of portfolio) {
+        if (Array.isArray(item) && item.length === 2) {
+          const [timeframe, data] = item;
+          if (
+            data &&
+            Array.isArray(data.accountValueHistory) &&
+            data.accountValueHistory.length > 0
+          ) {
+            accountValueHistory = data.accountValueHistory;
+            // Prefer "day" or "allTime" timeframes for more granular data
+            if (timeframe === 'day' || timeframe === 'allTime') {
+              break;
+            }
+          }
+        }
+      }
 
-			if (accountValueHistory.length === 0) {
-				return 0;
-			}
+      if (accountValueHistory.length === 0) {
+        return 0;
+      }
 
-			// If no specific timestamp requested, return most recent equity
-			if (!atMs) {
-				const latest = accountValueHistory[accountValueHistory.length - 1];
-				return latest ? parseFloat(latest[1]) : 0;
-			}
+      // If no specific timestamp requested, return most recent equity
+      if (!atMs) {
+        const latest = accountValueHistory[accountValueHistory.length - 1];
+        return latest ? parseFloat(latest[1]) : 0;
+      }
 
-			// Find equity closest to but not after atMs
-			let closestEntry: [number, string] | null = null;
+      // Find equity closest to but not after atMs
+      let closestEntry: [number, string] | null = null;
 
-			for (const entry of accountValueHistory) {
-				const [timestamp, value] = entry;
-				if (timestamp <= atMs) {
-					if (!closestEntry || timestamp > closestEntry[0]) {
-						closestEntry = entry as [number, string];
-					}
-				}
-			}
+      for (const entry of accountValueHistory) {
+        const [timestamp, value] = entry;
+        if (timestamp <= atMs) {
+          if (!closestEntry || timestamp > closestEntry[0]) {
+            closestEntry = entry as [number, string];
+          }
+        }
+      }
 
-			// If no entry found before atMs, use the earliest available
-			if (!closestEntry && accountValueHistory.length > 0) {
-				closestEntry = accountValueHistory[0] as [number, string];
-			}
+      // If no entry found before atMs, use the earliest available
+      if (!closestEntry && accountValueHistory.length > 0) {
+        closestEntry = accountValueHistory[0] as [number, string];
+      }
 
-			return closestEntry ? parseFloat(closestEntry[1]) : 0;
+      return closestEntry ? parseFloat(closestEntry[1]) : 0;
+    } catch (error) {
+      console.warn(`Failed to get equity for user ${user}:`, error);
+      return 0;
+    }
+  }
 
-		} catch (error) {
-			console.warn(`Failed to get equity for user ${user}:`, error);
-			return 0;
-		}
-	}
+ /**
+   * Get all users who have traded.
+   *
+   * LIMITATION: The Hyperliquid public API does not provide an endpoint to
+   * retrieve a list of all users. The leaderboard feature requires this method
+   * to rank users by volume, PnL, or return percentage.
+   *
+   * This implementation returns a hardcoded list of users for leaderboard functionality.
+   * For production, consider:
+   * - Maintaining an in-memory cache of users from previous queries
+   * - Using a database/indexing service to track known users
+   * - Accepting a user list as a parameter in the leaderboard request
+   * - Using a separate data source that maintains user registries
+   *
+   * @returns Array of user addresses for leaderboard ranking
+   */
+  async getAllUsers(): Promise<string[]> {
+    // Default user list for leaderboard
+    return [
+      '0x0e09b56ef137f417e424f1265425e93bfff77e17',
+      '0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
+      '0x6c8031a9eb4415284f3f89c0420f697c87168263',
+      '0xa1650C9f9EAd31802Bf4f802c84B28eD9f123C19',
+    ];
+  }
 
-	/**
-	 * Get all users who have traded.
-	 * 
-	 * LIMITATION: The Hyperliquid public API does not provide an endpoint to
-	 * retrieve a list of all users. The leaderboard feature requires this method
-	 * to rank users by volume, PnL, or return percentage.
-	 * 
-	 * This implementation returns a hardcoded list of users for leaderboard functionality.
-	 * For production, consider:
-	 * - Maintaining an in-memory cache of users from previous queries
-	 * - Using a database/indexing service to track known users
-	 * - Accepting a user list as a parameter in the leaderboard request
-	 * - Using a separate data source that maintains user registries
-	 * 
-	 * @returns Array of user addresses for leaderboard ranking
-	 */
-	async getAllUsers(): Promise<string[]> {
-		// Default user list for leaderboard
-		return [
-			'0x0e09b56ef137f417e424f1265425e93bfff77e17',
-			'0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
-			'0x6c8031a9eb4415284f3f89c0420f697c87168263',
-		];
-	}
+  /**
+   * Calculate total volume for a user.
+   * Volume is computed from fills by summing notional value (price * size).
+   * Applies coin, time, and builderOnly filters if provided.
+   *
+   * Note: For builderOnly, we can only filter at the fill level (by builderFee presence).
+   * Taint detection (mixed builder/non-builder trades in same lifecycle) requires
+   * position lifecycle analysis, which is done in the service layer.
+   */
+  async getVolume(params: GetVolumeParams): Promise<number> {
+    const fills = await this.getFills({
+      user: params.user,
+      fromMs: params.fromMs,
+      toMs: params.toMs,
+    });
 
-	/**
-	 * Calculate total volume for a user.
-	 * Volume is computed from fills by summing notional value (price * size).
-	 * Applies coin and time filters if provided.
-	 */
-	async getVolume(params: GetVolumeParams): Promise<number> {
-		const fills = await this.getFills({
-			user: params.user,
-			fromMs: params.fromMs,
-			toMs: params.toMs,
-		});
+    // Filter by coin if specified (Hyperliquid API doesn't filter at request level)
+    let filteredFills = fills;
+    if (params.coin) {
+      filteredFills = filteredFills.filter((fill) => fill.coin === params.coin);
+    }
 
-		// Filter by coin if specified (Hyperliquid API doesn't filter at request level)
-		let filteredFills = fills;
-		if (params.coin) {
-			filteredFills = fills.filter((fill) => fill.coin === params.coin);
-		}
+    // Filter by builderOnly if specified (only builder-attributed trades)
+    // Note: This filters based on builderFee presence, but doesn't account for
+    // tainted lifecycles. For proper builder-only filtering with taint detection,
+    // use getPnl() instead which uses getPositionLifecycles().
+    if (params.builderOnly) {
+      filteredFills = filteredFills.filter(
+        (fill) =>
+          fill.builderFee !== undefined &&
+          parseFloat(fill.builderFee || '0') > 0,
+      );
+    }
 
-		// Sum notional value: price * size for each fill
-		const volume = filteredFills.reduce((sum, fill) => {
-			const px = parseFloat(fill.px);
-			const sz = parseFloat(fill.sz);
-			return sum + px * sz;
-		}, 0);
+    // Sum notional value: price * size for each fill
+    const volume = filteredFills.reduce((sum, fill) => {
+      const px = parseFloat(fill.px);
+      const sz = parseFloat(fill.sz);
+      return sum + px * sz;
+    }, 0);
 
-		return volume;
-	}
+    return volume;
+  }
 
 	/**
 	 * Get deposits/withdrawals for a user.
