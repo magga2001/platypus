@@ -1,0 +1,15 @@
+# Add common files/folders to ignore
+node_modules
+npm-debug.log
+dist
+.git
+.gitignore
+.env
+.env.*
+*.md
+Dockerfile
+.dockerignore
+.vscode
+.idea
+coverage
+.DS_Store

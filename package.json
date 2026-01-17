@@ -24,7 +24,10 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.0.9",
+    "@types/pg": "^8.16.0",
+    "@types/swagger-jsdoc": "^6.0.4",
     "dotenv": "^17.2.3",
+    "drizzle-kit": "^0.31.8",
     "eslint": "^9.39.2",
     "express": "^5.2.1",
     "install": "^0.13.0",
@@ -32,12 +35,16 @@
     "npm": "^11.7.0",
     "prettier": "^3.8.0",
     "ts-node": "^10.9.2",
+    "tsc-alias": "^1.8.16",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^3.0.6",
     "@scalar/express-api-reference": "^0.8.34",
     "cors": "^2.8.5",
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.17.1",
     "swagger-jsdoc": "^6.2.8"
   }
 }
