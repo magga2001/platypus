@@ -67,9 +67,38 @@ export class LedgerService {
     // Get lifecycles (reusable internal method)
     const lifecycles = await this.getPositionLifecycles(params);
 
-    return lifecycles
-      .filter((l) => !params.builderOnly || l.builderOnly)
-      .flatMap((l) => l.timeline);
+    // Get current open positions for risk data (bonus feature)
+    const currentPositions = await this.datasource.getCurrentPositions(params.user);
+    const positionRiskMap = new Map(
+      currentPositions.map(p => [p.coin, {
+        liquidationPx: p.liquidationPx,
+        marginUsed: p.marginUsed,
+      }])
+    );
+
+    const filteredLifecycles = lifecycles
+      .filter((l) => !params.builderOnly || l.builderOnly);
+
+    // Flatten timeline and add risk data for current open positions
+    return filteredLifecycles.flatMap((l) => {
+      const riskData = positionRiskMap.get(l.coin);
+      
+      return l.timeline.map((entry: any, index: number) => {
+        // Only add risk data to the LAST entry if position is still open
+        const isLastEntry = index === l.timeline.length - 1;
+        const isOpenPosition = entry.netSize !== 0;
+        
+        if (isLastEntry && isOpenPosition && riskData) {
+          return {
+            ...entry,
+            liquidationPx: riskData.liquidationPx,
+            marginUsed: riskData.marginUsed,
+          };
+        }
+        
+        return entry;
+      });
+    });
   }
 
   /* =========================
@@ -362,10 +391,18 @@ export class LedgerService {
           } else {
             // Position flip or partial close (bonus feature implemented)
             // Handles: long → short, short → long, partial closes
-            // When flipping, reset entry calculation to new direction
-            // For partial close, keep previous entry price
-            if (Math.abs(netAfter) < Math.abs(startPosition)) {
-              // Partial close - keep entry price
+            
+            // Check if position flipped (sign changed)
+            const didFlip = (startPosition * netAfter < 0) && netAfter !== 0;
+            
+            if (didFlip) {
+              // Position flip (long → short or short → long)
+              // Reset entry calculation to new direction
+              avgEntryPx = fillPrice;
+              state.entryValue = fillPrice * Math.abs(netAfter);
+              state.entrySize = Math.abs(netAfter);
+            } else if (Math.abs(netAfter) < Math.abs(startPosition)) {
+              // Partial close (reducing position) - keep entry price
               if (state.entrySize !== 0) {
                 avgEntryPx = state.entryValue / state.entrySize;
               } else {
@@ -375,7 +412,7 @@ export class LedgerService {
               state.entrySize = Math.abs(netAfter);
               state.entryValue = avgEntryPx * Math.abs(netAfter);
             } else {
-              // Position flip (long → short or short → long) - reset entry calculation
+              // Shouldn't happen, but fallback
               avgEntryPx = fillPrice;
               state.entryValue = fillPrice * Math.abs(netAfter);
               state.entrySize = Math.abs(netAfter);
