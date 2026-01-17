@@ -2,6 +2,9 @@ import app from './app';
 import config from './config/config';
 import { fillSyncService } from './service/fillSyncService';
 import { userFillRepository } from './repository/userFillRepository';
+import { LedgerService } from './service/ledgerService';
+
+const ledgerService = new LedgerService();
 
 // Start fill sync service for all users in database
 async function startFillSync() {
@@ -18,9 +21,13 @@ async function startFillSync() {
 
     console.log(`📋 Found ${users.length} users in database`);
     
-    // Start syncing for each user
+    // Backfill and start syncing for each user
     for (const user of users) {
       try {
+        console.log(`🔄 Backfilling data for ${user}...`);
+        await ledgerService.backfillUser(user);
+        
+        console.log(`🔄 Starting WebSocket sync for ${user}...`);
         await fillSyncService.startSyncingUser(user);
       } catch (error) {
         console.error(`Failed to start sync for ${user}:`, error);
