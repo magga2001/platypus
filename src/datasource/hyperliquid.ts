@@ -33,7 +33,7 @@ export interface LedgerDatasource {
 }
 
 export class PublicHLDatasource implements LedgerDatasource {
-	constructor() {}
+	constructor() { }
 
 	/**
 	 * Fetch fills from Hyperliquid API.
@@ -62,31 +62,76 @@ export class PublicHLDatasource implements LedgerDatasource {
 
 	/**
 	 * Get user's equity at a specific time.
-	 * Note: This endpoint is not yet implemented in the Hyperliquid API spec provided.
-	 * Returns 0 as placeholder - implement when endpoint is available.
+	 * 
+	 * LIMITATION: The Hyperliquid public API does not provide a direct endpoint
+	 * to retrieve a user's account equity/value at a historical timestamp.
+	 * 
+	 * This method is used by the PnL service to calculate return percentage
+	 * when `maxStartCapital` is provided. Without equity data, return percentage
+	 * calculations will default to 0.
+	 * 
+	 * Possible workarounds (not implemented):
+	 * - Calculate equity from position history (complex, requires market prices)
+	 * - Use a separate data source that maintains account snapshots
+	 * - Accept equity as a parameter in the PnL request
+	 * 
+	 * @returns 0 (placeholder - indicates equity data unavailable)
 	 */
 	async getEquityAt(_user: string, _atMs?: number): Promise<number> {
-		// TODO: Implement when Hyperliquid exposes equity/account value endpoint
+		// TODO: Implement via alternative data source or accept as request parameter
 		return 0;
 	}
 
 	/**
 	 * Get all users who have traded.
-	 * Note: This endpoint is not available in public Hyperliquid API.
-	 * Returns empty array - would need to maintain a separate index.
+	 * 
+	 * LIMITATION: The Hyperliquid public API does not provide an endpoint to
+	 * retrieve a list of all users. The leaderboard feature requires this method
+	 * to rank users by volume, PnL, or return percentage.
+	 * 
+	 * This implementation returns a hardcoded list of users for leaderboard functionality.
+	 * For production, consider:
+	 * - Maintaining an in-memory cache of users from previous queries
+	 * - Using a database/indexing service to track known users
+	 * - Accepting a user list as a parameter in the leaderboard request
+	 * - Using a separate data source that maintains user registries
+	 * 
+	 * @returns Array of user addresses for leaderboard ranking
 	 */
 	async getAllUsers(): Promise<string[]> {
-		// TODO: Implement via separate indexing service or database
-		return [];
+		// Default user list for leaderboard
+		return [
+			'0x0e09b56ef137f417e424f1265425e93bfff77e17',
+			'0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
+			'0x6c8031a9eb4415284f3f89c0420f697c87168263',
+		];
 	}
 
 	/**
 	 * Calculate total volume for a user.
-	 * Note: This is computed from fills, not a direct API endpoint.
-	 * Returns 0 as placeholder - implement by summing notional from getFills.
+	 * Volume is computed from fills by summing notional value (price * size).
+	 * Applies coin and time filters if provided.
 	 */
-	async getVolume(_params: GetVolumeParams): Promise<number> {
-		// TODO: Implement by fetching fills and summing (px * sz)
-		return 0;
+	async getVolume(params: GetVolumeParams): Promise<number> {
+		const fills = await this.getFills({
+			user: params.user,
+			fromMs: params.fromMs,
+			toMs: params.toMs,
+		});
+
+		// Filter by coin if specified (Hyperliquid API doesn't filter at request level)
+		let filteredFills = fills;
+		if (params.coin) {
+			filteredFills = fills.filter((fill) => fill.coin === params.coin);
+		}
+
+		// Sum notional value: price * size for each fill
+		const volume = filteredFills.reduce((sum, fill) => {
+			const px = parseFloat(fill.px);
+			const sz = parseFloat(fill.sz);
+			return sum + px * sz;
+		}, 0);
+
+		return volume;
 	}
 }
