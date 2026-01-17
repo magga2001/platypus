@@ -69,18 +69,55 @@ export class LedgerService {
     // Get lifecycles (reusable internal method)
     const lifecycles = await this.getPositionLifecycles(params);
 
+    // Get current open positions for risk data (bonus feature)
+    const currentPositions = await this.datasource.getCurrentPositions(params.user);
+    const positionRiskMap = new Map(
+      currentPositions.map(p => [p.coin, {
+        liquidationPx: p.liquidationPx,
+        marginUsed: p.marginUsed,
+      }])
+    );
+
     // Filter by builderOnly if specified, and exclude tainted lifecycles
-    const filtered = params.builderOnly
+    const filteredLifecycles = params.builderOnly
       ? lifecycles.filter((l) => l.builderOnly && !l.tainted)
       : lifecycles;
 
-    return filtered.flatMap((l) => l.timeline);
+    // Flatten timeline and add risk data for current open positions
+    return filteredLifecycles.flatMap((l) => {
+      const riskData = positionRiskMap.get(l.coin);
+      
+      return l.timeline.map((entry: any, index: number) => {
+        // Only add risk data to the LAST entry if position is still open
+        const isLastEntry = index === l.timeline.length - 1;
+        const isOpenPosition = entry.netSize !== 0;
+        
+        if (isLastEntry && isOpenPosition && riskData) {
+          return {
+            ...entry,
+            liquidationPx: riskData.liquidationPx,
+            marginUsed: riskData.marginUsed,
+          };
+        }
+        
+        return entry;
+      });
+    });
   }
 
   /* =========================
      PnL
      ========================= */
 
+  /**
+   * Get PnL for a user with optional filters.
+   * 
+   * Multi-coin aggregation (bonus feature):
+   * - If coin specified: returns PnL for that specific coin
+   * - If coin NOT specified: returns portfolio-level PnL across all coins
+   * 
+   * This enables both single-coin and multi-coin leaderboards.
+   */
   async getPnl(params: {
     user: string;
     coin?: string;
@@ -110,9 +147,10 @@ export class LedgerService {
 
     // Spec: effectiveCapital = min(equityAtFromMs, maxStartCapital)
     // If maxStartCapital not specified, use actual equityAtFromMs
-    const effectiveCapital = params.maxStartCapital !== undefined
-      ? Math.min(equityAtFromMs, params.maxStartCapital)
-      : equityAtFromMs;
+    const effectiveCapital =
+      params.maxStartCapital !== undefined
+        ? Math.min(equityAtFromMs, params.maxStartCapital)
+        : equityAtFromMs;
 
     return {
       realizedPnl,
@@ -124,7 +162,10 @@ export class LedgerService {
       tainted: params.builderOnly ? lifecycles.some((l) => l.tainted) : false,
       // Metadata: show which capital source was used
       effectiveCapital,
-      capitalSource: params.maxStartCapital !== undefined ? 'maxStartCapital' : 'equityAtFromMs',
+      capitalSource:
+        params.maxStartCapital !== undefined
+          ? 'maxStartCapital'
+          : 'equityAtFromMs',
       equityAtFromMs, // Always show actual equity found (even if maxStartCapital was used)
     };
   }
@@ -143,33 +184,71 @@ export class LedgerService {
   }) {
     const users = await this.datasource.getAllUsers();
 
+    // For returnPct metric, we need equity. Fetch once for all users if needed.
+    let equityCache: Record<string, number> = {};
+    if (params.metric === 'returnPct' || params.maxStartCapital !== undefined) {
+      await Promise.all(
+        users.map(async (user) => {
+          equityCache[user] = await this.datasource.getEquityAt(
+            user,
+            params.fromMs,
+          );
+        }),
+      );
+    }
+
     const rows = await Promise.all(
       users.map(async (user) => {
-        const pnl = await this.getPnl({
+        // Fetch lifecycles once per user
+        const lifecycles = await this.getPositionLifecycles({
           user,
-          ...params,
+          coin: params.coin,
+          fromMs: params.fromMs,
+          toMs: params.toMs,
+          builderOnly: params.builderOnly,
         });
 
-        let metricValue = 0;
+        // Filter for builderOnly if needed
+        const eligible = params.builderOnly
+          ? lifecycles.filter((l) => l.builderOnly && !l.tainted)
+          : lifecycles;
 
-        if (params.metric === 'pnl') metricValue = pnl.realizedPnl;
-        if (params.metric === 'returnPct') metricValue = pnl.returnPct;
-        if (params.metric === 'volume') {
-          metricValue = await this.datasource.getVolume({
-            user,
-            coin: params.coin,
-            fromMs: params.fromMs,
-            toMs: params.toMs,
-            builderOnly: params.builderOnly,
-          });
+        const isTainted = params.builderOnly
+          ? lifecycles.some((l) => l.tainted)
+          : false;
+
+        // Use cached equity (already fetched once if needed)
+        const equityAtFromMs = equityCache[user] || 0;
+        const effectiveCapital =
+          params.maxStartCapital !== undefined
+            ? Math.min(equityAtFromMs, params.maxStartCapital)
+            : equityAtFromMs;
+
+        // Calculate all metrics from eligible lifecycles
+        const realizedPnl = eligible.reduce((sum, l) => sum + l.realizedPnl, 0);
+        const volume = eligible.reduce((sum, l) => sum + l.volume, 0);
+        const returnPct =
+          effectiveCapital > 0 ? (realizedPnl / effectiveCapital) * 100 : 0;
+        const tradeCount = eligible.reduce((sum, l) => sum + l.tradeCount, 0);
+        const fillCount = eligible.reduce((sum, l) => sum + l.fillCount, 0);
+
+        // Determine metric value based on requested metric
+        let metricValue = 0;
+        if (params.metric === 'volume') metricValue = volume;
+        if (params.metric === 'pnl') metricValue = realizedPnl;
+        if (params.metric === 'returnPct') metricValue = returnPct;
+
+        // If builderOnly and user is tainted, exclude from results
+        if (params.builderOnly && isTainted) {
+          metricValue = 0;
         }
 
         return {
           user,
           metricValue,
-          tradeCount: pnl.tradeCount, // Unique trades (by tid)
-          fillCount: pnl.fillCount, // Total fills
-          tainted: pnl.tainted,
+          tradeCount,
+          fillCount,
+          tainted: isTainted,
         };
       }),
     );
@@ -183,13 +262,56 @@ export class LedgerService {
   }
 
   /* =========================
+     Deposits (Bonus Feature)
+     ========================= */
+
+  /**
+   * Get deposit history for a user (optional bonus feature).
+   * 
+   * API Spec: GET /v1/deposits?user=&fromMs=&toMs=
+   * Returns: totalDeposits, depositCount, deposits[]
+   * 
+   * Enables filtering users who reloaded capital during competition window.
+   * Important for fair competition - users who deposit mid-competition
+   * should be flagged or excluded from certain leaderboards.
+   * 
+   * Returns: totalDeposits, depositCount, deposits[]
+   * Note: Only positive transfers (deposits) are returned, withdrawals are filtered out.
+   */
+  async getDeposits(params: {
+    user: string;
+    fromMs?: number;
+    toMs?: number;
+  }) {
+    const allTransfers = await this.datasource.getDeposits(params);
+    
+    // Filter to only deposits (positive amounts)
+    const deposits = allTransfers.filter(d => d.type === 'deposit');
+    
+    // Calculate total
+    const totalDeposits = deposits.reduce((sum, d) => {
+      return sum + parseFloat(d.amount || '0');
+    }, 0);
+
+    return {
+      totalDeposits: totalDeposits.toFixed(2),
+      depositCount: deposits.length,
+      deposits: deposits.map(d => ({
+        timeMs: d.time,
+        amount: d.amount,
+        coin: d.coin,
+      })),
+    };
+  }
+
+  /* =========================
      Internal helpers
      ========================= */
 
   /**
    * Internal helper: Get position lifecycles for a user.
    * This is a reusable method that both getPositionHistory and getPnl use.
-   * 
+   *
    * Returns position lifecycles with builder/taint tracking.
    */
   private async getPositionLifecycles(params: {
@@ -210,7 +332,7 @@ export class LedgerService {
    * Internal helper: Get transformed fills with position tracking fields.
    * This fetches fills from the datasource and transforms them to include
    * netAfter (position size after fill) and avgEntryPx (weighted average entry price).
-   * 
+   *
    * Used by getTrades, getPositionHistory, and getPnl to avoid code duplication.
    */
   private async getTransformedFills(params: {
@@ -226,7 +348,7 @@ export class LedgerService {
 
   /**
    * Check if a fill is attributed to a builder.
-   * 
+   *
    * According to Hyperliquid API spec:
    * - builderFee field is present (and > 0) when trade is builder-attributed
    * - The specific builder address is not returned in the API response
@@ -239,7 +361,9 @@ export class LedgerService {
   private isBuilderTrade(fill: any): boolean {
     // Check if builderFee field exists and is > 0
     // This indicates the trade was attributed to a builder (any builder)
-    return fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0;
+    return (
+      fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0
+    );
   }
 
   /**
@@ -321,11 +445,20 @@ export class LedgerService {
             state.entrySize += Math.abs(fillDelta);
             avgEntryPx = state.entryValue / state.entrySize;
           } else {
-            // Flipping position (long to short or vice versa) or partial close
-            // When flipping, reset entry calculation to new direction
-            // For partial close, keep previous entry price
-            if (Math.abs(netAfter) < Math.abs(startPosition)) {
-              // Partial close - keep entry price
+            // Position flip or partial close (bonus feature implemented)
+            // Handles: long → short, short → long, partial closes
+            
+            // Check if position flipped (sign changed)
+            const didFlip = (startPosition * netAfter < 0) && netAfter !== 0;
+            
+            if (didFlip) {
+              // Position flip (long → short or short → long)
+              // Reset entry calculation to new direction
+              avgEntryPx = fillPrice;
+              state.entryValue = fillPrice * Math.abs(netAfter);
+              state.entrySize = Math.abs(netAfter);
+            } else if (Math.abs(netAfter) < Math.abs(startPosition)) {
+              // Partial close (reducing position) - keep entry price
               if (state.entrySize !== 0) {
                 avgEntryPx = state.entryValue / state.entrySize;
               } else {
@@ -335,7 +468,7 @@ export class LedgerService {
               state.entrySize = Math.abs(netAfter);
               state.entryValue = avgEntryPx * Math.abs(netAfter);
             } else {
-              // Flipping - reset entry calculation
+              // Shouldn't happen, but fallback
               avgEntryPx = fillPrice;
               state.entryValue = fillPrice * Math.abs(netAfter);
               state.entrySize = Math.abs(netAfter);
@@ -366,10 +499,7 @@ export class LedgerService {
    * Build position lifecycles from transformed fills.
    * A lifecycle starts when netSize goes from 0 → non-zero and ends when it returns to 0.
    */
-  private buildPositionLifecycles(
-    fills: any[],
-    builderOnly: boolean,
-  ) {
+  private buildPositionLifecycles(fills: any[], builderOnly: boolean) {
     const lifecycles: any[] = [];
     let current: any = null;
 
@@ -416,16 +546,19 @@ export class LedgerService {
         const closedPnl = parseFloat(fill.closedPnl || '0');
         current.realizedPnl += closedPnl;
 
+        // Add volume: notional value (price * size)
+        const px = parseFloat(fill.px || '0');
+        const sz = parseFloat(fill.sz || '0');
+        current.volume += px * sz;
+
         // Check if position closed (netAfter === 0)
         if (fill.netAfter === 0) {
           // Set tradeCount to unique order count before finalizing
           current.tradeCount = current.uniqueOrderIds.size;
 
           // Determine final tainted and builderOnly status
-          current.tainted =
-            current.hasNonBuilder && current.hasBuilder;
-          current.builderOnly =
-            current.hasBuilder && !current.tainted;
+          current.tainted = current.hasNonBuilder && current.hasBuilder;
+          current.builderOnly = current.hasBuilder && !current.tainted;
 
           // Update all timeline entries with final tainted status when builderOnly mode
           if (builderOnly && current.timeline.length > 0) {
@@ -467,6 +600,7 @@ export class LedgerService {
       coin: fill.coin,
       timeline: [],
       realizedPnl: 0,
+      volume: 0, // Total notional volume (price * size) for this lifecycle
       feesPaid: 0,
       tradeCount: 0, // Will be set to uniqueOrderIds.size when lifecycle closes
       fillCount: 0, // Total fills in this lifecycle

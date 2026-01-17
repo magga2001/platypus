@@ -7,18 +7,19 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "allowJs": true,
-    "outDir": "./dist",
 
-    // Module resolution
+    // Build output
+    "outDir": "./dist",
+    "rootDir": "./src",
     "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "esModuleInterop": true,
 
     // Best practices
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
 
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,

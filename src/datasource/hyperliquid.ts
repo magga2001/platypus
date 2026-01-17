@@ -1,16 +1,16 @@
 /**
-* Datasource adapter for Hyperliquid public API.
-* 
-* This layer wraps the low-level hyperliquidClient and implements
-* the LedgerDatasource interface. The service layer uses this interface,
-* making it easy to swap to different datasources (Insilico, HyperServe)
-* without changing service logic.
-* 
-* WebSocket Support:
-* - Real-time data streaming via subscribeToUserFills()
-* - REST API fallback for historical data and reliability
-* - In-memory cache for WebSocket-sourced fills
-*/
+ * Datasource adapter for Hyperliquid public API.
+ *
+ * This layer wraps the low-level hyperliquidClient and implements
+ * the LedgerDatasource interface. The service layer uses this interface,
+ * making it easy to swap to different datasources (Insilico, HyperServe)
+ * without changing service logic.
+ *
+ * WebSocket Support:
+ * - Real-time data streaming via subscribeToUserFills()
+ * - REST API fallback for historical data and reliability
+ * - In-memory cache for WebSocket-sourced fills
+ */
 
 import { defaultHyperliquidClient } from '../lib/hyperliquidClient';
 import type { Fill } from '../lib/hyperliquidClient';
@@ -18,19 +18,49 @@ import { defaultHyperliquidWebSocket, HyperliquidWebSocket } from '../lib/hyperl
 import type { WsUserFills } from '../lib/hyperliquidWebSocket';
 
 export interface GetFillsParams {
-	user: string;
-	coin?: string;
-	fromMs?: number;
-	toMs?: number;
-	builderOnly?: boolean;
+  user: string;
+  coin?: string;
+  fromMs?: number;
+  toMs?: number;
+  builderOnly?: boolean;
 }
 
 export interface GetVolumeParams {
+  user: string;
+  coin?: string;
+  fromMs?: number;
+  toMs?: number;
+  builderOnly?: boolean;
+}
+
+export interface Deposit {
+	time: number;           // Timestamp in milliseconds
+	amount: string;         // Deposit amount
+	coin: string;           // Coin deposited (e.g., "USDC")
+	txHash?: string;        // Transaction hash
+	type: 'deposit' | 'withdrawal' | 'transfer';
+}
+
+export interface GetDepositsParams {
 	user: string;
-	coin?: string;
 	fromMs?: number;
 	toMs?: number;
-	builderOnly?: boolean;
+}
+
+export interface Position {
+	coin: string;
+	szi: string;            // Position size
+	leverage: {
+		type: string;
+		value: number;
+	};
+	liquidationPx?: string; // Liquidation price
+	marginUsed: string;     // Margin used for this position
+	maxLeverage: number;
+	positionValue: string;
+	returnOnEquity: string;
+	unrealizedPnl: string;
+	entryPx?: string;      // Entry price
 }
 
 export interface LedgerDatasource {
@@ -38,6 +68,8 @@ export interface LedgerDatasource {
 	getEquityAt(user: string, atMs?: number): Promise<number>;
 	getAllUsers(): Promise<string[]>;
 	getVolume(params: GetVolumeParams): Promise<number>;
+	getDeposits(params: GetDepositsParams): Promise<Deposit[]>;
+	getCurrentPositions(user: string): Promise<Position[]>;
 	// WebSocket methods
 	subscribeToUserFills?(user: string, onUpdate: (fills: Fill[]) => void): Promise<() => void>;
 	getCachedFills?(user: string): Fill[];
@@ -135,136 +167,252 @@ export class PublicHLDatasource implements LedgerDatasource {
 			.slice(0, MAX_FILLS);
 	}
 
+  /**
+   * Get user's equity at a specific time.
+   *
+   * Uses the Hyperliquid portfolio endpoint to retrieve account value history.
+   * If atMs is provided, finds the closest equity value at or before that timestamp.
+   * If atMs is not provided, returns the most recent equity value.
+   *
+   * @param user - User address
+   * @param atMs - Optional timestamp in milliseconds
+   * @returns User's equity at the specified time, or 0 if unavailable
+   */
+  async getEquityAt(user: string, atMs?: number): Promise<number> {
+    try {
+      // Get portfolio history from Hyperliquid API
+      const portfolio = await defaultHyperliquidClient.getPortfolio(user);
+
+      if (!portfolio || !Array.isArray(portfolio)) {
+        return 0;
+      }
+
+      // Extract accountValueHistory from the appropriate timeframe
+      // Try "day" first for most recent data, fallback to other timeframes
+      let accountValueHistory: [number, string][] = [];
+
+      for (const item of portfolio) {
+        if (Array.isArray(item) && item.length === 2) {
+          const [timeframe, data] = item;
+          if (
+            data &&
+            Array.isArray(data.accountValueHistory) &&
+            data.accountValueHistory.length > 0
+          ) {
+            accountValueHistory = data.accountValueHistory;
+            // Prefer "day" or "allTime" timeframes for more granular data
+            if (timeframe === 'day' || timeframe === 'allTime') {
+              break;
+            }
+          }
+        }
+      }
+
+      if (accountValueHistory.length === 0) {
+        return 0;
+      }
+
+      // If no specific timestamp requested, return most recent equity
+      if (!atMs) {
+        const latest = accountValueHistory[accountValueHistory.length - 1];
+        return latest ? parseFloat(latest[1]) : 0;
+      }
+
+      // Find equity closest to but not after atMs
+      let closestEntry: [number, string] | null = null;
+
+      for (const entry of accountValueHistory) {
+        const [timestamp, value] = entry;
+        if (timestamp <= atMs) {
+          if (!closestEntry || timestamp > closestEntry[0]) {
+            closestEntry = entry as [number, string];
+          }
+        }
+      }
+
+      // If no entry found before atMs, use the earliest available
+      if (!closestEntry && accountValueHistory.length > 0) {
+        closestEntry = accountValueHistory[0] as [number, string];
+      }
+
+      return closestEntry ? parseFloat(closestEntry[1]) : 0;
+    } catch (error) {
+      console.warn(`Failed to get equity for user ${user}:`, error);
+      return 0;
+    }
+  }
+
+ /**
+   * Get all users who have traded.
+   *
+   * LIMITATION: The Hyperliquid public API does not provide an endpoint to
+   * retrieve a list of all users. The leaderboard feature requires this method
+   * to rank users by volume, PnL, or return percentage.
+   *
+   * This implementation returns a hardcoded list of users for leaderboard functionality.
+   * For production, consider:
+   * - Maintaining an in-memory cache of users from previous queries
+   * - Using a database/indexing service to track known users
+   * - Accepting a user list as a parameter in the leaderboard request
+   * - Using a separate data source that maintains user registries
+   *
+   * @returns Array of user addresses for leaderboard ranking
+   */
+  async getAllUsers(): Promise<string[]> {
+    // Default user list for leaderboard
+    return [
+      '0x0e09b56ef137f417e424f1265425e93bfff77e17',
+      '0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
+      '0x6c8031a9eb4415284f3f89c0420f697c87168263',
+      '0xa1650C9f9EAd31802Bf4f802c84B28eD9f123C19',
+    ];
+  }
+
+  /**
+   * Calculate total volume for a user.
+   * Volume is computed from fills by summing notional value (price * size).
+   * Applies coin, time, and builderOnly filters if provided.
+   *
+   * Note: For builderOnly, we can only filter at the fill level (by builderFee presence).
+   * Taint detection (mixed builder/non-builder trades in same lifecycle) requires
+   * position lifecycle analysis, which is done in the service layer.
+   */
+  async getVolume(params: GetVolumeParams): Promise<number> {
+    const fills = await this.getFills({
+      user: params.user,
+      fromMs: params.fromMs,
+      toMs: params.toMs,
+    });
+
+    // Filter by coin if specified (Hyperliquid API doesn't filter at request level)
+    let filteredFills = fills;
+    if (params.coin) {
+      filteredFills = filteredFills.filter((fill) => fill.coin === params.coin);
+    }
+
+    // Filter by builderOnly if specified (only builder-attributed trades)
+    // Note: This filters based on builderFee presence, but doesn't account for
+    // tainted lifecycles. For proper builder-only filtering with taint detection,
+    // use getPnl() instead which uses getPositionLifecycles().
+    if (params.builderOnly) {
+      filteredFills = filteredFills.filter(
+        (fill) =>
+          fill.builderFee !== undefined &&
+          parseFloat(fill.builderFee || '0') > 0,
+      );
+    }
+
+    // Sum notional value: price * size for each fill
+    const volume = filteredFills.reduce((sum, fill) => {
+      const px = parseFloat(fill.px);
+      const sz = parseFloat(fill.sz);
+      return sum + px * sz;
+    }, 0);
+
+    return volume;
+  }
+
 	/**
-	 * Get user's equity at a specific time.
+	 * Get deposits/withdrawals for a user.
 	 * 
-	 * Uses the Hyperliquid portfolio endpoint to retrieve account value history.
-	 * If atMs is provided, finds the closest equity value at or before that timestamp.
-	 * If atMs is not provided, returns the most recent equity value.
+	 * Uses the userNonFundingLedgerUpdates endpoint which provides actual
+	 * deposit/withdrawal transactions (not inferred from portfolio changes).
 	 * 
-	 * @param user - User address
-	 * @param atMs - Optional timestamp in milliseconds
-	 * @returns User's equity at the specified time, or 0 if unavailable
+	 * This endpoint returns ledger updates including:
+	 * - Deposits: type="deposit" with usdc field
+	 * - Withdrawals: type="withdraw" with usdc field
+	 * - Internal transfers: type="accountClassTransfer", type="spotTransfer", etc.
 	 */
-	async getEquityAt(user: string, atMs?: number): Promise<number> {
+	async getDeposits(params: GetDepositsParams): Promise<Deposit[]> {
 		try {
-			// Get portfolio history from Hyperliquid API
-			const portfolio = await defaultHyperliquidClient.getPortfolio(user);
+			const { user, fromMs, toMs } = params;
+			
+			// Get all non-funding ledger updates
+			const ledger = await defaultHyperliquidClient.getUserNonFundingLedgerUpdates(
+				user,
+				fromMs,
+				toMs
+			);
 
-			if (!portfolio || !Array.isArray(portfolio)) {
-				return 0;
+			if (!Array.isArray(ledger) || ledger.length === 0) {
+				return [];
 			}
 
-			// Extract accountValueHistory from the appropriate timeframe
-			// Try "day" first for most recent data, fallback to other timeframes
-			let accountValueHistory: [number, string][] = [];
+			// Extract deposits and withdrawals
+			const deposits: Deposit[] = [];
+			
+			for (const entry of ledger) {
+				if (!entry || !entry.delta || !entry.delta.type) continue;
 
-			for (const item of portfolio) {
-				if (Array.isArray(item) && item.length === 2) {
-					const [timeframe, data] = item;
-					if (data && Array.isArray(data.accountValueHistory) && data.accountValueHistory.length > 0) {
-						accountValueHistory = data.accountValueHistory;
-						// Prefer "day" or "allTime" timeframes for more granular data
-						if (timeframe === 'day' || timeframe === 'allTime') {
-							break;
-						}
-					}
+				const { time, delta, hash } = entry;
+				
+				// Handle deposits
+				if (delta.type === 'deposit' && delta.usdc) {
+					deposits.push({
+						time,
+						amount: delta.usdc,
+						coin: 'USDC',
+						txHash: hash !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? hash : undefined,
+						type: 'deposit',
+					});
+				}
+				
+				// Handle withdrawals
+				else if (delta.type === 'withdraw' && delta.usdc) {
+					deposits.push({
+						time,
+						amount: delta.usdc,
+						coin: 'USDC',
+						txHash: hash !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? hash : undefined,
+						type: 'withdrawal',
+					});
 				}
 			}
 
-			if (accountValueHistory.length === 0) {
-				return 0;
-			}
-
-			// If no specific timestamp requested, return most recent equity
-			if (!atMs) {
-				const latest = accountValueHistory[accountValueHistory.length - 1];
-				return latest ? parseFloat(latest[1]) : 0;
-			}
-
-			// Find equity closest to but not after atMs
-			let closestEntry: [number, string] | null = null;
-
-			for (const entry of accountValueHistory) {
-				const [timestamp, value] = entry;
-				if (timestamp <= atMs) {
-					if (!closestEntry || timestamp > closestEntry[0]) {
-						closestEntry = entry as [number, string];
-					}
-				}
-			}
-
-			// If no entry found before atMs, use the earliest available
-			if (!closestEntry && accountValueHistory.length > 0) {
-				closestEntry = accountValueHistory[0] as [number, string];
-			}
-
-			return closestEntry ? parseFloat(closestEntry[1]) : 0;
+			// Return deposits and withdrawals sorted by time (newest first)
+			return deposits.sort((a, b) => b.time - a.time);
 
 		} catch (error) {
-			console.warn(`Failed to get equity for user ${user}:`, error);
-			return 0;
+			console.warn(`Failed to get deposits for user ${params.user}:`, error);
+			return [];
 		}
 	}
 
 	/**
-	 * Get all users who have traded.
+	 * Get current open positions for a user with risk data.
 	 * 
-	 * LIMITATION: The Hyperliquid public API does not provide an endpoint to
-	 * retrieve a list of all users. The leaderboard feature requires this method
-	 * to rank users by volume, PnL, or return percentage.
-	 * 
-	 * This implementation returns a hardcoded list of users for leaderboard functionality.
-	 * For production, consider:
-	 * - Maintaining an in-memory cache of users from previous queries
-	 * - Using a database/indexing service to track known users
-	 * - Accepting a user list as a parameter in the leaderboard request
-	 * - Using a separate data source that maintains user registries
-	 * 
-	 * @returns Array of user addresses for leaderboard ranking
+	 * Fetches clearinghouse state which includes:
+	 * - Position size and direction
+	 * - Liquidation price
+	 * - Margin used
+	 * - Leverage
+	 * - Unrealized PnL
 	 */
-	async getAllUsers(): Promise<string[]> {
-		// Default user list for leaderboard
-		return [
-			'0x0e09b56ef137f417e424f1265425e93bfff77e17',
-			'0x186b7610ff3f2e3fd7985b95f525ee0e37a79a74',
-			'0x6c8031a9eb4415284f3f89c0420f697c87168263',
-		];
-	}
+	async getCurrentPositions(user: string): Promise<Position[]> {
+		try {
+			const state = await defaultHyperliquidClient.getClearinghouseState(user);
+			
+			if (!state || !state.assetPositions) {
+				return [];
+			}
 
-	/**
-	 * Calculate total volume for a user.
-	 * Volume is computed from fills by summing notional value (price * size).
-	 * Applies coin, time, and builderOnly filters if provided.
-	 */
-	async getVolume(params: GetVolumeParams): Promise<number> {
-		const fills = await this.getFills({
-			user: params.user,
-			fromMs: params.fromMs,
-			toMs: params.toMs,
-		});
+			return state.assetPositions.map((pos: any) => ({
+				coin: pos.position.coin,
+				szi: pos.position.szi,
+				leverage: pos.position.leverage,
+				liquidationPx: pos.position.liquidationPx,
+				marginUsed: pos.position.marginUsed,
+				maxLeverage: pos.position.maxLeverage,
+				positionValue: pos.position.positionValue,
+				returnOnEquity: pos.position.returnOnEquity,
+				unrealizedPnl: pos.position.unrealizedPnl,
+				entryPx: pos.position.entryPx,
+			}));
 
-		// Filter by coin if specified (Hyperliquid API doesn't filter at request level)
-		let filteredFills = fills;
-		if (params.coin) {
-			filteredFills = filteredFills.filter((fill) => fill.coin === params.coin);
+		} catch (error) {
+			console.warn(`Failed to get current positions for user ${user}:`, error);
+			return [];
 		}
-
-		// Filter by builderOnly if specified (only builder-attributed trades)
-		if (params.builderOnly) {
-			filteredFills = filteredFills.filter((fill) =>
-				fill.builderFee !== undefined && parseFloat(fill.builderFee || '0') > 0
-			);
-		}
-
-		// Sum notional value: price * size for each fill
-		const volume = filteredFills.reduce((sum, fill) => {
-			const px = parseFloat(fill.px);
-			const sz = parseFloat(fill.sz);
-			return sum + px * sz;
-		}, 0);
-
-		return volume;
 	}
 
 	/**
